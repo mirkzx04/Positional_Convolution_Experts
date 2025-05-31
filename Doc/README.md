@@ -1,6 +1,6 @@
 # Progetto: Positional Convolution Experts
 
-## Idea
+## Abstract
 
 Le CNN tradizionali processano le immagini attraverso un singolo canale convoluzionale, limitando potenzialmente la capacità della rete di catturare informazioni posizionali specifiche. Questo progetto propone un'architettura innovativa basata su **Positional Convolution Experts** che sfrutta sia il contenuto che la posizione delle patch per indirizzare ciascuna patch verso esperti specializzati, ottenendo feature map più ricche e rappresentative.
 
@@ -27,19 +27,23 @@ Tre approcci alternativi per la fase iniziale:
 #### Opzione A: Routing Deterministico con Rumore
 - Routing basato sulla posizione della patch con aggiunta di rumore controllato
 - Gli esperti si specializzano mantenendo un mix causato dal rumore
-- Vantaggi: Specializzazione garantita con diversificazione
+- **Vantaggi**: Specializzazione garantita con diversificazione
 
 #### Opzione B: Cosine Similarity con Chiavi EMA
 Utilizza cosine similarity con chiavi inizializzate tramite GPA e K-Means:
 
 **Aggiornamento delle chiavi:**
-$k_i^{t+1} = k_i^t \cdot \alpha + (1 - \alpha) \cdot v_i$
-dove $v_i$ è la media delle patch che hanno ricevuto peso $w_i$ alto per l'esperto $E_i$.
+
+$k_i^{t+1} = \alpha \cdot k_i^t + (1 - \alpha) \cdot v_i$
+
+dove $v_i$ è la media delle patch che hanno ricevuto peso alto per l'esperto $E_i$.
 
 Le chiavi rappresentano medie mobili assegnate a ciascuna patch, mantenute fuori dal grafo computazionale.
 
-### Opzione C: Distribuzione Uniforme
-Utilizzo di una distribuzione fittizia: $\frac{\text{numero\_batch}}{\text{numero\_esperti}}$
+#### Opzione C: Distribuzione Uniforme
+Utilizzo di una distribuzione fittizia:
+
+$w_i = \frac{\text{numero patch}}{\text{numero esperti}}$
 
 ### Fase 2: Introduzione del Router
 
@@ -56,25 +60,33 @@ Utilizzo di una distribuzione fittizia: $\frac{\text{numero\_batch}}{\text{numer
 4. Somma ponderata delle feature map degli esperti
 
 #### Key Attention Routing
+
 **Processo:**
-1. **Formazione del vettore chiave:** $k \in \mathbb{R}^d$
-2. **Flattening della patch:** $p \in \mathbb{R}^{C \times H \times W}$
+
+1. **Formazione del vettore chiave:**
+   $k \in \mathbb{R}^d$
+
+2. **Flattening della patch:**
+   $p \in \mathbb{R}^{C \times H \times W}$
 
 **Inizializzazione delle chiavi:**
 - Randomica uniforme
 - GPA + K-Means sui centroidi
 
 **Calcolo della similarità:**
-$s_i = \frac{v \cdot k}{\|v \cdot k\|}$
+
+$s_i = \frac{v \cdot k}{||v \cdot k||}$
 
 **Pesi di routing:**
-$w_j = \frac{e^{s_j}}{\sum_{j}e^{s_j}}$
+
+$w_j = \frac{e^{s_j}}{\sum_j e^{s_j}}$
 
 **Output finale:**
-$out = \sum_{i}w_i \cdot E_i(p)$
+
+$\text{out} = \sum_i w_i \cdot E_i(p)$
 
 **Aggiornamento delle chiavi:**
-- `nn.Parameter` di PyTorch
+- nn.Parameter di PyTorch
 - EMA con parametri backpropagabili
 
 #### Gumbel Softmax
