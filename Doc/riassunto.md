@@ -16,7 +16,7 @@ A) Routing deterministico: con rumore controllato
 B) Cosine similarity: con chiavi EMA inizializzate tramite K-Means
 C) Distribuzione uniforme: tra gli esperti
 - Fase 2: 
-Viene scelto un meccanismo di routing: MLP, KeyAttention con MAE, Gubme Softmax
+Viene scelto un meccanismo di routing: MLP, KeyAttention con MAE, Gumble Softmax
 
 **Valutazione e Metriche**
 **Dataset**: CIFAR-10, Tiny-ImageNet, Pascal VOC, Camelyon

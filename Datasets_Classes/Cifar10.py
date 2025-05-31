@@ -37,6 +37,9 @@ class CIFAR10Dataset(Dataset):
 
             self.lables.extend(batch_data[b'labels'])
 
+        self.data = np.array(self.data)
+        self.lables = np.array(self.lables)
+
     # Unpickle function for cifar10 data
     def load_batch(self, path):
         with open(path, 'rb') as fo:

@@ -21,8 +21,8 @@ class PatchExtractor:
 
         # Extract patch
         patches = rearrange(image,
-                            'b c (h p1) (w p2) -> b (h w) c (p1 p2)',
-                            p1=self.patch_size, p2=self.patch_size)
+                    'b c (h p1) (w p2) -> b (h w) c p1 p2',
+                    p1=self.patch_size, p2=self.patch_size)
         
         # Compute number of patch for dimension
         h_patches = H // self.patch_size
@@ -37,10 +37,10 @@ class PatchExtractor:
 
                 coords.append([x_norm, y_norm]) # (x,y) normalizede 
 
-
         coords = torch.tensor(coords, dtype=torch.float32)
-        coords = repeat(coords, 'n coord -> b n coord pixels', b = B, pixels = self.patch_size**2)
+        coords = repeat(coords, 'n coord -> b n coord h w', b = B, h = H, w = W)
 
+        patches = torch.tensor(patches)
         patches_with_coords = torch.cat([patches, coords], dim = 2)
 
         return patches_with_coords

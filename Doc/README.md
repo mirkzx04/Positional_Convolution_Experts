@@ -30,7 +30,7 @@ Tre approcci alternativi per la fase iniziale:
 - **Vantaggi**: Specializzazione garantita con diversificazione
 
 #### Opzione B: Cosine Similarity con Chiavi EMA
-Utilizza cosine similarity con chiavi inizializzate tramite GPA e K-Means:
+Utilizza cosine similarity con chiavi inizializzate tramite K-Means:
 
 **Aggiornamento delle chiavi:**
 
@@ -71,7 +71,7 @@ $w_i = \frac{\text{numero patch}}{\text{numero esperti}}$
 
 **Inizializzazione delle chiavi:**
 - Randomica uniforme
-- GPA + K-Means sui centroidi
+- K-Means sui centroidi
 
 **Calcolo della similarità:**
 
