@@ -1,0 +1,139 @@
+# Progetto: Positional Convolution Experts
+
+## Idea
+
+Le CNN tradizionali processano le immagini attraverso un singolo canale convoluzionale, limitando potenzialmente la capacità della rete di catturare informazioni posizionali specifiche. Questo progetto propone un'architettura innovativa basata su **Positional Convolution Experts** che sfrutta sia il contenuto che la posizione delle patch per indirizzare ciascuna patch verso esperti specializzati, ottenendo feature map più ricche e rappresentative.
+
+## Motivazione
+
+Il problema principale delle CNN tradizionali risiede nella loro incapacità di sfruttare efficacemente le informazioni posizionali delle patch all'interno dell'immagine. Dividendo l'immagine in patch e utilizzando sia contenuto che posizione per il routing verso esperti specializzati, ogni esperto può focalizzarsi su caratteristiche specifiche di regioni specifiche dell'immagine.
+
+## Architettura Proposta
+
+### Concetto Fondamentale
+
+L'architettura si basa su un sistema di routing intelligente che:
+- Divide l'immagine in patch
+- Utilizza informazioni di contenuto e posizione per il routing
+- Indirizza ciascuna patch verso esperti specializzati
+- Combina i risultati per ottenere feature map generali arricchite
+
+## Metodologia di Training
+
+### Fase 1: Stabilizzazione dei Parametri
+
+Tre approcci alternativi per la fase iniziale:
+
+#### Opzione A: Routing Deterministico con Rumore
+- Routing basato sulla posizione della patch con aggiunta di rumore controllato
+- Gli esperti si specializzano mantenendo un mix causato dal rumore
+- Vantaggi: Specializzazione garantita con diversificazione
+
+#### Opzione B: Cosine Similarity con Chiavi EMA
+Utilizza cosine similarity con chiavi inizializzate tramite GPA e K-Means:
+
+**Aggiornamento delle chiavi:**
+$k_i^{t+1} = k_i^t \cdot \alpha + (1 - \alpha) \cdot v_i$
+dove $v_i$ è la media delle patch che hanno ricevuto peso $w_i$ alto per l'esperto $E_i$.
+
+Le chiavi rappresentano medie mobili assegnate a ciascuna patch, mantenute fuori dal grafo computazionale.
+
+### Opzione C: Distribuzione Uniforme
+Utilizzo di una distribuzione fittizia: $\frac{\text{numero\_batch}}{\text{numero\_esperti}}$
+
+### Fase 2: Introduzione del Router
+
+#### Router MLP
+**Caratteristiche:**
+- Più computazionalmente pesante
+- Richiede backpropagation completa
+- Pre-processing con CoordConv per arricchire le patch con informazioni posizionali
+
+**Pipeline:**
+1. Applicazione di CoordConv alla patch
+2. Feature map arricchita → MLP
+3. Output: distribuzione di probabilità sugli esperti
+4. Somma ponderata delle feature map degli esperti
+
+#### Key Attention Routing
+**Processo:**
+1. **Formazione del vettore chiave:** $k \in \mathbb{R}^d$
+2. **Flattening della patch:** $p \in \mathbb{R}^{C \times H \times W}$
+
+**Inizializzazione delle chiavi:**
+- Randomica uniforme
+- GPA + K-Means sui centroidi
+
+**Calcolo della similarità:**
+$s_i = \frac{v \cdot k}{\|v \cdot k\|}$
+
+**Pesi di routing:**
+$w_j = \frac{e^{s_j}}{\sum_{j}e^{s_j}}$
+
+**Output finale:**
+$out = \sum_{i}w_i \cdot E_i(p)$
+
+**Aggiornamento delle chiavi:**
+- `nn.Parameter` di PyTorch
+- EMA con parametri backpropagabili
+
+#### Gumbel Softmax
+Mantiene l'approccio dell'Opzione B nella fase di pre-training con campionamento differenziabile.
+
+### Fase 3: Introduzione dell'Attention
+
+**Pipeline:**
+1. Somma di concatenazione → Convoluzione 1×1
+2. Feature map risultante → Modulo di Attention
+3. Feature map arricchita per il routing successivo
+
+**Valutazione:** Le performance vengono monitorate per determinare l'utilità del modulo.
+
+## Valutazione e Metriche
+
+### Object Detection
+**Dataset:** CIFAR-10, Tiny-ImageNet, Pascal VOC
+
+**Metriche:**
+- **Accuracy:** Top-1 e Top-5 su CIFAR-10 e Tiny-ImageNet
+- **mAP:** Mean Average Precision su Pascal VOC
+
+### Segmentazione
+**Dataset:** Pascal VOC, Camelyon
+
+**Metriche:**
+- **mIoU:** Mean Intersection over Union
+
+## Risultati Attesi
+
+### Performance
+- Miglioramento dell'accuracy rispetto alle CNN tradizionali
+- Performance competitive con le CNN moderne
+- Specializzazione degli esperti basata sulla posizione delle patch
+
+### Interpretabilità
+Le rotte di routing offrono insights unici:
+- **Analisi delle assegnazioni:** Quale patch viene assegnata a quale esperto
+- **Specializzazione degli esperti:** Comprensione delle caratteristiche apprese
+- **Ottimizzazione dell'architettura:** Rimozione o rinforzo di esperti basato sull'entropia del router
+
+### Metriche di Analisi
+- **Entropia del router:** Misura della distribuzione delle assegnazioni
+- **Clustering delle rotte:** Analisi dei pattern di routing
+- **Statistiche degli esperti:** Utilizzo medio e specializzazione
+
+## Vantaggi dell'Approccio
+
+1. **Specializzazione Posizionale:** Ogni esperto si focalizza su regioni specifiche
+2. **Feature Map Arricchite:** Combinazione di informazioni locali e globali
+3. **Interpretabilità:** Possibilità di analizzare le decisioni di routing
+4. **Flessibilità:** Multipli approcci di training e routing
+5. **Ottimizzazione Adattiva:** Possibilità di modificare la rete basandosi sull'analisi delle rotte
+
+## Implementazione
+
+Il progetto sarà implementato utilizzando PyTorch, con particolare attenzione a:
+- Modularità del codice per testare diverse opzioni di routing
+- Logging dettagliato per l'analisi delle performance
+- Visualizzazione delle rotte di routing per l'interpretabilità
+- Benchmarking sistematico contro architetture baseline
