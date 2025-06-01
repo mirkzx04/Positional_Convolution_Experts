@@ -25,7 +25,8 @@ L'immagine di input nella rete $[B,C,H,W]$ dove:
 - C -> Channel (RGB)
 - H -> Height
 - W -> Width
-viene divisa in patch di dimensioni $hP \times wP$, applicando poi CoordConv su pixel-level aggiungiamo informazione spaziale su dove si trovano i pixel all'interno della patch e dove si trova la patch rispetto all'immagine, ottenendo 
+
+La patch viene divisa in patch di dimensioni $hP \times wP$, applicando poi CoordConv su pixel-level aggiungiamo informazione spaziale su dove si trovano i pixel all'interno della patch e dove si trova la patch rispetto all'immagine, ottenendo 
 $[B, nP, C +4, H, W]$ dove $C+4$ rappresenta l'aggiunta delle coordinate della patch e di ogni pixel all'interno dei patch.
 Le patch vengono usate prima del training per inizializzare delle chiavi all'interno del router.
 
