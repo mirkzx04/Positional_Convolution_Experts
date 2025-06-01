@@ -25,10 +25,11 @@ L'immagine di input nella rete $[B,C,H,W]$ dove:
 - C -> Channel (RGB)
 - H -> Height
 - W -> Width
-viene divisa in patch di dimensioni $ hP \times wP $, applicando poi CoordConv su pixel-level aggiungiamo informazione spaziale su dove si trovano i pixel all'interno della patch e dove si trova la patch rispetto all'immagine, ottenendo $[B, nP, C +4, H, W]$ dove $C+4$ rappresenta l'aggiunta delle coordinate della patch e di ogni pixel all'interno dei patch.
+viene divisa in patch di dimensioni $hP \times wP$, applicando poi CoordConv su pixel-level aggiungiamo informazione spaziale su dove si trovano i pixel all'interno della patch e dove si trova la patch rispetto all'immagine, ottenendo 
+$[B, nP, C +4, H, W]$ dove $C+4$ rappresenta l'aggiunta delle coordinate della patch e di ogni pixel all'interno dei patch.
 Le patch vengono usate prima del training per inizializzare delle chiavi all'interno del router.
 
-Le chiavi vengono inizializzate tramite una convoluzione $ 1 \times 1 $ sulla patch ridimensionata come $$[B \times P, C+4, H, W]$$, il risultato di questa convoluzione viene passato a SSP per produrre dei patch embedding $ Em_p $ che poi saranno applicati a K-Means per ottenere i centroidi che verranno usati come chiavi $k \in \mathbb{R^{n_{exp} \times d}}$ dove $D = (C+4) \times (1^2 + 2^2 4^2)$.
+Le chiavi vengono inizializzate tramite una convoluzione $1 \times 1$ sulla patch ridimensionata come $$[B \times P, C+4, H, W]$$, il risultato di questa convoluzione viene passato a SSP per produrre dei patch embedding $ Em_p $ che poi saranno applicati a K-Means per ottenere i centroidi che verranno usati come chiavi $k \in \mathbb{R^{n_{exp} \times d}}$ dove $D = (C+4) \times (1^2 + 2^2 4^2)$.
 
 Il router applicherà cosine similarity tra $ Em_p $ e $ k $ applicando poi softmax per ottenere le probabilità di scelta dei diversi esperti.
 Gli esperti convoluzionali son definiti ocome $Conv_{kz \times kz} - BatchNorm - ReLU$ produrranno diverse feature map che verranno concatenate attraverso una somma pesata, dove i pesi saranno gli score delle probabilità date dalla softmax.
