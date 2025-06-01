@@ -30,7 +30,8 @@ Tre approcci alternativi per la fase iniziale:
 - **Vantaggi**: Specializzazione garantita con diversificazione
 
 #### Opzione B: Cosine Similarity con Chiavi EMA
-Utilizza cosine similarity con chiavi inizializzate tramite K-Means:
+Utilizza cosine similarity con chiavi inizializzate tramite SSP per la riduzione standardizzazione della dimensionalità mantenendo le relazioni spaziali pixel-level e K-Means per clusterizzare le patch attorno a dei centroidi che poi verranno usati come chiavi per calcolare la similarità.
+La patch verrà passata in canale SSP in modo da produrre un embedding della patch $ Em_p $ che verrà usato per il calcolo della similarità.
 
 **Aggiornamento delle chiavi:**
 
@@ -75,7 +76,7 @@ $w_i = \frac{\text{numero patch}}{\text{numero esperti}}$
 
 **Calcolo della similarità:**
 
-$s_i = \frac{v \cdot k}{||v \cdot k||}$
+$s_i = \frac{Em_p \cdot k}{||Em_p \cdot k||}$
 
 **Pesi di routing:**
 

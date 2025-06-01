@@ -4,14 +4,34 @@ import torch.nn.functional as F
 from sklearn.cluster import KMeans
 from torch import nn
 
+from .SSP import SSP
 class Router(nn.Module):
-    def __init__(self,num_experts):
+    def __init__(self,num_experts, out_channel_key):
         super().__init__()
         """
         Router constructor
+
+        Args:
+            out_channel_key -> out channel for convolution of pixel projection
+            num_experts -> number of experts in all layer, we use this number for compute cluster with K-Means
         """
 
         self.num_experts = num_experts
+
+        self.ssp = SSP()
+
+        self.conv_proj = nn.Conv2d(in_channels=5, kernel_size=3, out_channels=out_channel_key)
+
+
+    def forward(self, patch):
+        patch_proj = self.conv_proj(self.reshape_patch(patch))
+
+        patch_emb = self.ssp(patch_proj)
+        patch_emb = F.normalize(patch_emb, dim=-1)
+        
+        # Compute cosine simlarity between patch embedding and keys
+        logits = patch_emb @ self.keys.T
+        print(f'logits_shape : {logits.shape}')
 
     def initialize_keys(self, patches):
         """
@@ -21,20 +41,28 @@ class Router(nn.Module):
             patches -> Tensor (B, number_patch, C + 2, H, W)
                     where + 2 is positional information and H = W = patch_size
         """
-        # Reshape patches from (B, P, C + 2, H, W) to (BxP, (C + 2)xCxHxW)
-        B, P, C, H, W = patches.shape
-        D = C*H*W
-        patches_flat = patches.view(B*P, D)
 
-        patches_flat = patches_flat.cpu().numpy()
+        with torch.no_grad():
+            # pixel projection for create patch embedding with SSP
+            patch_proj = self.conv_proj(self.reshape_patch(patches))
+            print(f'Patch embedding shape : {patch_proj.shape}')
 
-        # Initialize KMeans and fit for get centroids
-        kmeans = KMeans(n_clusters = self.num_experts, n_init = 'auto', random_state = 42)
-        kmeans.fit(patches_flat)
-        centroids = kmeans.cluster_centers_
+            # Applied SSP for get patch embedding using K-Means
+            patch_emb = self.ssp(patch_proj)
+            print(f'Patch emb shape : {patch_emb.shape}')
 
-        # Normalize centroids
-        keys = torch.tensor(centroids, dtype=torch.float32)
-        keys = F.normalize(keys, dim=-1)
+            # Initialize KMeans and fit for get centroids
+            kmeans = KMeans(n_clusters = self.num_experts, n_init = 'auto', random_state = 42)
+            kmeans.fit(patch_emb.detach().cpu().numpy())
+            centroids = kmeans.cluster_centers_
+            print(f'Centroids shape : {centroids.shape}')
 
-        return keys
+            # Normalize centroids
+            keys = torch.tensor(centroids, dtype=torch.float32)
+            self.keys = F.normalize(keys, dim=-1)
+            print(f'Keys shape : {keys.shape}')
+
+    def reshape_patch(self, patch):
+        # Reshape patches from (B, P, C + 2, H, W) to (BxP, (C + 2), H, W)
+        B, P, C, H, W = patch.shape
+        return patch.reshape(B*P, C, H, W)
