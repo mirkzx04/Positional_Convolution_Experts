@@ -1,163 +1,163 @@
-# Progetto: Positional Convolution Experts
+# Project: Positional Convolution Experts
 
 ## Abstract
 
-Le CNN tradizionali processano le immagini attraverso un singolo canale convoluzionale, limitando potenzialmente la capacità della rete di catturare informazioni posizionali specifiche. Questo progetto propone un'architettura innovativa basata su **Positional Convolution Experts** che sfrutta sia il contenuto che la posizione delle patch per indirizzare ciascuna patch verso esperti specializzati, ottenendo feature map più ricche e rappresentative.
+Traditional CNNs process images through a single convolutional channel, potentially limiting the network's ability to capture specific positional information. This project proposes an innovative architecture based on **Positional Convolution Experts** that leverages both content and position of patches to route each patch towards specialized experts, obtaining richer and more representative feature maps.
 
-## Motivazione
+## Motivation
 
-Il problema principale delle CNN tradizionali risiede nella loro incapacità di sfruttare efficacemente le informazioni posizionali delle patch all'interno dell'immagine. Dividendo l'immagine in patch e utilizzando sia contenuto che posizione per il routing verso esperti specializzati, ogni esperto può focalizzarsi su caratteristiche specifiche di regioni specifiche dell'immagine.
+The main problem of traditional CNNs lies in their inability to effectively exploit positional information of patches within the image. By dividing the image into patches and using both content and position for routing towards specialized experts, each expert can focus on specific characteristics of specific regions of the image.
 
-## Architettura Proposta
+## Proposed Architecture
 
-### Concetto Fondamentale
+### Fundamental Concept
 
-L'architettura si basa su un sistema di routing intelligente che:
-- Divide l'immagine in patch
-- Utilizza informazioni di contenuto e posizione per il routing
-- Indirizza ciascuna patch verso esperti specializzati
-- Combina i risultati per ottenere feature map generali arricchite
+The architecture is based on an intelligent routing system that:
+- Divides the image into patches
+- Uses content and position information for routing
+- Routes each patch towards specialized experts
+- Combines results to obtain enriched general feature maps
 
-### Pipeline approfondita
+### Detailed Pipeline
 
-L'immagine di input nella rete $[B,C,H,W]$ dove:
-- B -> Batch size
-- C -> Channel (RGB)
-- H -> Height
-- W -> Width
+The input image in the network $[B,C,H,W]$ where:
+- B → Batch size
+- C → Channel (RGB)
+- H → Height
+- W → Width
 
-L'immagine / feature map viene divisa in patch di dimensioni $hP \times wP$, applicando poi CoordConv su pixel-level aggiungiamo informazione spaziale su dove si trovano i pixel all'interno della patch e dove si trova la patch rispetto all'immagine, ottenendo 
-$[B, nP, C +4, H, W]$ dove $C+4$ rappresenta l'aggiunta delle coordinate della patch e di ogni pixel all'interno dei patch.
-Le patch vengono usate prima del training per inizializzare delle chiavi all'interno del router.
+The image/feature map is divided into patches of dimensions $hP \times wP$, then applying CoordConv at pixel-level we add spatial information about where pixels are located within the patch and where the patch is located relative to the image, obtaining 
+$[B, nP, C +4, H, W]$ where $C+4$ represents the addition of patch coordinates and each pixel within the patches.
+The patches are used before training to initialize keys within the router.
 
-Le chiavi vengono inizializzate tramite una convoluzione $1 \times 1$ sulla patch ridimensionata come $$[B \times P, C+4, H, W]$$, il risultato di questa convoluzione viene passato a SSP per produrre dei patch embedding $ Em_p $ che poi saranno applicati a K-Means per ottenere i centroidi che verranno usati come chiavi $k \in \mathbb{R^{n_{exp} \times d}}$ dove $D = (C+4) \times (1^2 + 2^2 4^2)$.
+The keys are initialized through a $1 \times 1$ convolution on the patch resized as $$[B \times P, C+4, H, W]$$, the result of this convolution is passed to SSP to produce patch embeddings $ Em_p $ which will then be applied to K-Means to obtain centroids that will be used as keys $k \in \mathbb{R^{n_{exp} \times d}}$ where $D = (C+4) \times (1^2 + 2^2 + 4^2)$.
 
-Il router applicherà cosine similarity tra $Em_p$ e $k$ applicando poi softmax per ottenere le probabilità di scelta dei diversi esperti.
-Gli esperti convoluzionali son definiti ocome $Conv_{kz \times kz} - BatchNorm - ReLU$ produrranno diverse feature map che verranno concatenate attraverso una somma pesata, dove i pesi saranno gli score delle probabilità date dalla softmax.
+The router will apply cosine similarity between $Em_p$ and $k$ then applying softmax to obtain the selection probabilities of different experts.
+The convolutional experts are defined as $Conv_{kz \times kz} - BatchNorm - ReLU$ and will produce different feature maps that will be concatenated through a weighted sum, where the weights will be the probability scores given by the softmax.
 
-Ottenuta la feature map globale questa verrà ridivisa in patch nel modo descritto sopra e le patch verranno riapplicate al router.
+Once the global feature map is obtained, it will be re-divided into patches in the manner described above and the patches will be re-applied to the router.
 
-## Metodologia di Training
+## Training Methodology
 
-### Fase 1: Stabilizzazione dei Parametri
+### Phase 1: Parameter Stabilization
 
-Tre approcci alternativi per la fase iniziale:
+Three alternative approaches for the initial phase:
 
-#### Opzione A: Routing Deterministico con Rumore
-- Routing basato sulla posizione della patch con aggiunta di rumore controllato
-- Gli esperti si specializzano mantenendo un mix causato dal rumore
-- **Vantaggi**: Specializzazione garantita con diversificazione
+#### Option A: Deterministic Routing with Noise
+- Position-based patch routing with controlled noise addition
+- Experts specialize while maintaining mix caused by noise
+- **Advantages**: Guaranteed specialization with diversification
 
-#### Opzione B: Cosine Similarity con Chiavi EMA
-Utilizza cosine similarity con chiavi inizializzate tramite SSP per la standardizzazione della dimensionalità mantenendo le relazioni spaziali pixel-level e, K-Means per clusterizzare le patch attorno a dei centroidi che poi verranno usati come chiavi per calcolare la similarità con l'embedding della patch ottenuti tramite SSP.
-La patch verrà passata in canale SSP in modo da produrre un embedding della patch $ Em_p $ che verrà usato per il calcolo della similarità.
-Le chiavi rappresentano medie mobili assegnate a ciascuna patch, mantenute fuori dal grafo computazionale.
+#### Option B: Cosine Similarity with EMA Keys
+Uses cosine similarity with keys initialized through SSP for dimensionality standardization while maintaining pixel-level spatial relationships and K-Means to cluster patches around centroids that will then be used as keys to calculate similarity with patch embeddings obtained through SSP.
+The patch will be passed through the SSP channel to produce a patch embedding $ Em_p $ that will be used for similarity calculation.
+The keys represent moving averages assigned to each patch, maintained outside the computational graph.
 
-#### Opzione C: Distribuzione Uniforme
-Utilizzo di una distribuzione fittizia:
+#### Option C: Uniform Distribution
+Use of a dummy distribution:
 
-$w_i = \frac{\text{numero patch}}{\text{numero esperti}}$
+$w_i = \frac{\text{number of patches}}{\text{number of experts}}$
 
-### Fase 2: Introduzione del Router
+### Phase 2: Router Introduction
 
-#### Router MLP
-**Caratteristiche:**
-- Più computazionalmente pesante
-- Richiede backpropagation completa
-- Pre-processing con CoordConv per arricchire le patch con informazioni posizionali
+#### MLP Router
+**Characteristics:**
+- More computationally heavy
+- Requires complete backpropagation
+- Pre-processing with CoordConv to enrich patches with positional information
 
 **Pipeline:**
-1. Applicazione di CoordConv alla patch
-2. Feature map arricchita → MLP
-3. Output: distribuzione di probabilità sugli esperti
-4. Somma ponderata delle feature map degli esperti
+1. Application of CoordConv to the patch
+2. Enriched feature map → MLP
+3. Output: probability distribution over experts
+4. Weighted sum of expert feature maps
 
 #### Key Attention Routing
 
-**Processo:**
+**Process:**
 
-1. **Formazione del vettore chiave:**
+1. **Key vector formation:**
    $k \in \mathbb{R}^d$
 
-2. **Embedding della patch:**
+2. **Patch embedding:**
    $p \in \mathbb{R}^{C \times H \times W}$
 
-**Inizializzazione delle chiavi:**
-Standardizzazione delle dimensioni con SSP e clusterizzazione con K-Means
+**Key initialization:**
+Dimension standardization with SSP and clustering with K-Means
 
-**Calcolo della similarità:**
+**Similarity calculation:**
 
 $s_i = \frac{Em_p \cdot k}{||Em_p \cdot k||}$
 
-**Pesi di routing:**
+**Routing weights:**
 
-$w_j = \frac{e^{s_j}}{\sum_j e^{s_j}}$ o softmax
+$w_j = \frac{e^{s_j}}{\sum_j e^{s_j}}$ or softmax
 
-**Output finale:**
+**Final output:**
 
 $\text{out} = \sum_i w_i \cdot E_i(p)$
 
-**Aggiornamento delle chiavi:**
-- nn.Parameter di PyTorch (Probabilmente applicata dopo una fase di stabilizzazione con EMA) per ottimizzare le chiavi tramite backpropagation
-- EMA con parametri backpropagabili $k_i^{t+1} = \alpha \cdot k_i^t + (1 - \alpha) \cdot v_i$
+**Key updates:**
+- PyTorch nn.Parameter (Probably applied after a stabilization phase with EMA) to optimize keys through backpropagation
+- EMA with backpropagable parameters $k_i^{t+1} = \alpha \cdot k_i^t + (1 - \alpha) \cdot v_i$
 
 #### Gumbel Softmax
-Mantiene l'approccio dell'Opzione B nella fase di pre-training con campionamento differenziabile.
+Maintains the Option B approach in the pre-training phase with differentiable sampling.
 
-### Fase 3: Introduzione dell'Attention
+### Phase 3: Attention Introduction
 
 **Pipeline:**
-1. Somma di concatenazione → Convoluzione 1×1
-2. Feature map risultante → Modulo di Attention
-3. Feature map arricchita per il routing successivo
+1. Concatenation sum → 1×1 Convolution
+2. Resulting feature map → Attention Module
+3. Enriched feature map for subsequent routing
 
-**Valutazione:** Le performance vengono monitorate per determinare l'utilità del modulo.
+**Evaluation:** Performance is monitored to determine module utility.
 
-## Valutazione e Metriche
+## Evaluation and Metrics
 
 ### Object Detection
 **Dataset:** CIFAR-10, Tiny-ImageNet, Pascal VOC
 
-**Metriche:**
-- **Accuracy:** Top-1 e Top-5 su CIFAR-10 e Tiny-ImageNet
-- **mAP:** Mean Average Precision su Pascal VOC
+**Metrics:**
+- **Accuracy:** Top-1 and Top-5 on CIFAR-10 and Tiny-ImageNet
+- **mAP:** Mean Average Precision on Pascal VOC
 
-### Segmentazione
+### Segmentation
 **Dataset:** Pascal VOC, Camelyon
 
-**Metriche:**
+**Metrics:**
 - **mIoU:** Mean Intersection over Union
 
-## Risultati Attesi
+## Expected Results
 
 ### Performance
-- Miglioramento dell'accuracy rispetto alle CNN tradizionali
-- Performance competitive con le CNN moderne
-- Specializzazione degli esperti basata sulla posizione delle patch
+- Accuracy improvement compared to traditional CNNs
+- Competitive performance with modern CNNs
+- Expert specialization based on patch position
 
-### Interpretabilità
-Le rotte di routing offrono insights unici:
-- **Analisi delle assegnazioni:** Quale patch viene assegnata a quale esperto
-- **Specializzazione degli esperti:** Comprensione delle caratteristiche apprese
-- **Ottimizzazione dell'architettura:** Rimozione o rinforzo di esperti basato sull'entropia del router
+### Interpretability
+Routing paths offer unique insights:
+- **Assignment analysis:** Which patch is assigned to which expert
+- **Expert specialization:** Understanding of learned characteristics
+- **Architecture optimization:** Removal or reinforcement of experts based on router entropy
 
-### Metriche di Analisi
-- **Entropia del router:** Misura della distribuzione delle assegnazioni
-- **Clustering delle rotte:** Analisi dei pattern di routing
-- **Statistiche degli esperti:** Utilizzo medio e specializzazione
+### Analysis Metrics
+- **Router entropy:** Measure of assignment distribution
+- **Route clustering:** Analysis of routing patterns
+- **Expert statistics:** Average usage and specialization
 
-## Vantaggi dell'Approccio
+## Approach Advantages
 
-1. **Specializzazione Posizionale:** Ogni esperto si focalizza su regioni specifiche
-2. **Feature Map Arricchite:** Combinazione di informazioni locali e globali
-3. **Interpretabilità:** Possibilità di analizzare le decisioni di routing
-4. **Flessibilità:** Multipli approcci di training e routing
-5. **Ottimizzazione Adattiva:** Possibilità di modificare la rete basandosi sull'analisi delle rotte
+1. **Positional Specialization:** Each expert focuses on specific regions
+2. **Enriched Feature Maps:** Combination of local and global information
+3. **Interpretability:** Ability to analyze routing decisions
+4. **Flexibility:** Multiple training and routing approaches
+5. **Adaptive Optimization:** Ability to modify the network based on route analysis
 
-## Implementazione
+## Implementation
 
-Il progetto sarà implementato utilizzando PyTorch, con particolare attenzione a:
-- Modularità del codice per testare diverse opzioni di routing
-- Logging dettagliato per l'analisi delle performance
-- Visualizzazione delle rotte di routing per l'interpretabilità
-- Benchmarking sistematico contro architetture baseline
+The project will be implemented using PyTorch, with particular attention to:
+- Code modularity to test different routing options
+- Detailed logging for performance analysis
+- Routing path visualization for interpretability
+- Systematic benchmarking against baseline architectures
