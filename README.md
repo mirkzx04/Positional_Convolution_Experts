@@ -18,6 +18,23 @@ L'architettura si basa su un sistema di routing intelligente che:
 - Indirizza ciascuna patch verso esperti specializzati
 - Combina i risultati per ottenere feature map generali arricchite
 
+### Pipeline approfondita
+
+L'immagine di input nella rete $ [B,C,H,W] $ dove:
+- B -> Batch size
+- C -> Channel (RGB)
+- H -> Height
+- W -> Width
+viene divisa in patch di dimensioni $ hP \times wP $, applicando poi CoordConv su pixel-level aggiungiamo informazione spaziale su dove si trovano i pixel all'interno della patch e dove si trova la patch rispetto all'immagine, ottenendo $ [B, nP, C +4, H, W] $ dove $ C+4 $ rappresenta l'aggiunta delle coordinate della patch e di ogni pixel all'interno dei patch.
+Le patch vengono usate prima del training per inizializzare delle chiavi all'interno del router.
+
+Le chiavi vengono inizializzate tramite una convoluzione $ 1 \times 1 $ sulla patch ridimensionata come $$ [B \times P, C+4, H, W] $$, il risultato di questa convoluzione viene passato a SSP per produrre dei patch embedding $ Em_p $ che poi saranno applicati a K-Means per ottenere i centroidi che verranno usati come chiavi $ k \in \mathbb{R^{n_{exp} \times d}} $ dove $ D = (C+4) \times (1^2 + 2^2 4^2) $.
+
+Il router applicherà cosine similarity tra $ Em_p $ e $ k $ applicando poi softmax per ottenere le probabilità di scelta dei diversi esperti.
+Gli esperti convoluzionali son definiti ocome $ Conv_{kz \times kz} - BatchNorm - ReLU $ produrranno diverse feature map che verranno concatenate attraverso una somma pesata, dove i pesi saranno gli score delle probabilità date dalla softmax.
+
+Ottenuta la feature map globale questa verrà ridivisa in patch nel modo descritto sopra e le patch verranno riapplicate al router.
+
 ## Metodologia di Training
 
 ### Fase 1: Stabilizzazione dei Parametri
@@ -30,15 +47,8 @@ Tre approcci alternativi per la fase iniziale:
 - **Vantaggi**: Specializzazione garantita con diversificazione
 
 #### Opzione B: Cosine Similarity con Chiavi EMA
-Utilizza cosine similarity con chiavi inizializzate tramite SSP per la riduzione standardizzazione della dimensionalità mantenendo le relazioni spaziali pixel-level e K-Means per clusterizzare le patch attorno a dei centroidi che poi verranno usati come chiavi per calcolare la similarità.
+Utilizza cosine similarity con chiavi inizializzate tramite SSP per la standardizzazione della dimensionalità mantenendo le relazioni spaziali pixel-level e, K-Means per clusterizzare le patch attorno a dei centroidi che poi verranno usati come chiavi per calcolare la similarità con l'embedding della patch ottenuti tramite SSP.
 La patch verrà passata in canale SSP in modo da produrre un embedding della patch $ Em_p $ che verrà usato per il calcolo della similarità.
-
-**Aggiornamento delle chiavi:**
-
-$k_i^{t+1} = \alpha \cdot k_i^t + (1 - \alpha) \cdot v_i$
-
-dove $v_i$ è la media delle patch che hanno ricevuto peso alto per l'esperto $E_i$.
-
 Le chiavi rappresentano medie mobili assegnate a ciascuna patch, mantenute fuori dal grafo computazionale.
 
 #### Opzione C: Distribuzione Uniforme
@@ -67,12 +77,11 @@ $w_i = \frac{\text{numero patch}}{\text{numero esperti}}$
 1. **Formazione del vettore chiave:**
    $k \in \mathbb{R}^d$
 
-2. **Flattening della patch:**
+2. **Embedding della patch:**
    $p \in \mathbb{R}^{C \times H \times W}$
 
 **Inizializzazione delle chiavi:**
-- Randomica uniforme
-- K-Means sui centroidi
+Standardizzazione delle dimensioni con SSP e clusterizzazione con K-Means
 
 **Calcolo della similarità:**
 
@@ -80,15 +89,15 @@ $s_i = \frac{Em_p \cdot k}{||Em_p \cdot k||}$
 
 **Pesi di routing:**
 
-$w_j = \frac{e^{s_j}}{\sum_j e^{s_j}}$
+$w_j = \frac{e^{s_j}}{\sum_j e^{s_j}}$ o softmax
 
 **Output finale:**
 
 $\text{out} = \sum_i w_i \cdot E_i(p)$
 
 **Aggiornamento delle chiavi:**
-- nn.Parameter di PyTorch
-- EMA con parametri backpropagabili
+- nn.Parameter di PyTorch (Probabilmente applicata dopo una fase di stabilizzazione con EMA) per ottimizzare le chiavi tramite backpropagation
+- EMA con parametri backpropagabili $k_i^{t+1} = \alpha \cdot k_i^t + (1 - \alpha) \cdot v_i$
 
 #### Gumbel Softmax
 Mantiene l'approccio dell'Opzione B nella fase di pre-training con campionamento differenziabile.
