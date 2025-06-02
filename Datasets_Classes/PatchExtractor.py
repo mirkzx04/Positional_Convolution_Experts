@@ -40,7 +40,19 @@ class PatchExtractor:
         coords = torch.tensor(coords, dtype=torch.float32)
         coords = repeat(coords, 'n coord -> b n coord h w', b = B, h = H, w = W)
 
-        patches = torch.tensor(patches)
-        patches_with_coords = torch.cat([patches, coords], dim = 2)
+        # Add pixel-level position within patch
+        yy,xx = torch.meshgrid(
+            torch.linspace(0, 1, self.patch_size),
+            torch.linspace(0, 1, self.patch_size),
+            indexing='ij'
+        )
+
+        # Shape: (1, 1, 1, p, p) → broadcast to (B, P, 1, p, p)
+        xx = xx.unsqueeze(0).unsqueeze(0).unsqueeze(2).expand(B, patches.shape[1], 1, self.patch_size, self.patch_size)
+        yy = yy.unsqueeze(0).unsqueeze(0).unsqueeze(2).expand(B, patches.shape[1], 1, self.patch_size, self.patch_size)
+
+        # Concatenate all channels: original + patch coords + pixel coords
+        patches = patches.to(image.device)
+        patches_with_coords = torch.cat([patches, coords, xx, yy], dim=2)  # (B, P, C + 4, p, p)
 
         return patches_with_coords

@@ -5,6 +5,7 @@ from sklearn.cluster import KMeans
 from torch import nn
 
 from .SSP import SSP
+
 class Router(nn.Module):
     def __init__(self,num_experts, out_channel_key):
         super().__init__()
@@ -31,7 +32,9 @@ class Router(nn.Module):
         
         # Compute cosine simlarity between patch embedding and keys
         logits = patch_emb @ self.keys.T
-        print(f'logits_shape : {logits.shape}')
+        
+        weights = F.softmax(logits, dim=-1)
+        return weights
 
     def initialize_keys(self, patches):
         """
@@ -39,28 +42,24 @@ class Router(nn.Module):
 
         Args : 
             patches -> Tensor (B, number_patch, C + 2, H, W)
-                    where + 2 is positional information and H = W = patch_size
+                    where C + 2 is positional information and H = W = patch_size
         """
 
         with torch.no_grad():
             # pixel projection for create patch embedding with SSP
             patch_proj = self.conv_proj(self.reshape_patch(patches))
-            print(f'Patch embedding shape : {patch_proj.shape}')
 
             # Applied SSP for get patch embedding using K-Means
             patch_emb = self.ssp(patch_proj)
-            print(f'Patch emb shape : {patch_emb.shape}')
 
             # Initialize KMeans and fit for get centroids
             kmeans = KMeans(n_clusters = self.num_experts, n_init = 'auto', random_state = 42)
             kmeans.fit(patch_emb.detach().cpu().numpy())
             centroids = kmeans.cluster_centers_
-            print(f'Centroids shape : {centroids.shape}')
 
             # Normalize centroids
             keys = torch.tensor(centroids, dtype=torch.float32)
             self.keys = F.normalize(keys, dim=-1)
-            print(f'Keys shape : {keys.shape}')
 
     def reshape_patch(self, patch):
         # Reshape patches from (B, P, C + 2, H, W) to (BxP, (C + 2), H, W)
