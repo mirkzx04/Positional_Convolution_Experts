@@ -5,13 +5,13 @@ class ConvExpert(nn.Module):
         super().__init__()
 
         # Define experts operation
-        self.pools = nn.ModuleList(
-            nn.Conv2d(in_channels=7, out_channels=kernel_size, kernel_size=kernel_size, padding=3),
+        self.pools = nn.Sequential(
+            nn.Conv2d(in_channels=7, out_channels=out_channel, kernel_size=kernel_size, padding=4),
             nn.BatchNorm2d(out_channel),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(in_channels=7, out_channels=kernel_size, kernel_size=kernel_size, padding=3),
-            nn.BatchNorm2d(out_channel),
+            nn.Conv2d(in_channels=out_channel, out_channels=out_channel * 2, kernel_size=kernel_size, padding=4),
+            nn.BatchNorm2d(out_channel * 2),
             nn.ReLU(inplace=True)
         )
 

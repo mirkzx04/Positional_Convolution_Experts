@@ -1,12 +1,14 @@
 from einops import rearrange, repeat
 
 import torch
+import torch.nn as nn
 
-class PatchExtractor:
+class PatchExtractor(nn.Module):
     def __init__(self, patch_size):
+        super().__init__()
         self.patch_size = patch_size
 
-    def extract_patches_coords(self, image):
+    def forward(self, image):
         """
         Dvides an image in patch and return coordinate (x,y) for every patch
 
@@ -38,7 +40,7 @@ class PatchExtractor:
                 coords.append([x_norm, y_norm]) # (x,y) normalizede 
 
         coords = torch.tensor(coords, dtype=torch.float32)
-        coords = repeat(coords, 'n coord -> b n coord h w', b = B, h = H, w = W)
+        coords = repeat(coords, 'n coord -> b n coord h w', b = B, h = self.patch_size, w = self.patch_size)
 
         # Add pixel-level position within patch
         yy,xx = torch.meshgrid(

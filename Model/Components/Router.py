@@ -21,10 +21,14 @@ class Router(nn.Module):
 
         self.ssp = SSP()
 
-        self.conv_proj = nn.Conv2d(in_channels=5, kernel_size=3, out_channels=out_channel_key)
-
-
+        self.conv_proj = nn.Conv2d(in_channels=7, kernel_size=3, out_channels=out_channel_key)
     def forward(self, patch):
+        """
+        Forward method of Router
+
+        Args : 
+            patch -> tensor (B, nP, C + 4, nH, nW)
+        """
         patch_proj = self.conv_proj(self.reshape_patch(patch))
 
         patch_emb = self.ssp(patch_proj)
