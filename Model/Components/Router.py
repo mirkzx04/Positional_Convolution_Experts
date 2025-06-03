@@ -21,17 +21,14 @@ class Router(nn.Module):
 
         self.ssp = SSP()
 
-        self.conv_proj = nn.Conv2d(in_channels=7, kernel_size=3, out_channels=out_channel_key)
     def forward(self, patch):
         """
         Forward method of Router
 
         Args : 
-            patch -> tensor (B, nP, C + 4, nH, nW)
+            patch -> tensor (B x nP, C + 4, nH, nW)
         """
-        patch_proj = self.conv_proj(self.reshape_patch(patch))
-
-        patch_emb = self.ssp(patch_proj)
+        patch_emb = self.ssp(patch)
         patch_emb = F.normalize(patch_emb, dim=-1)
         
         # Compute cosine simlarity between patch embedding and keys
@@ -50,8 +47,11 @@ class Router(nn.Module):
         """
 
         with torch.no_grad():
+            # Reshape patch (B, nP, C + 4, nH, nW) -> (B x nP, C + 4, nH, nW) and applied projection convolution
             # pixel projection for create patch embedding with SSP
-            patch_proj = self.conv_proj(self.reshape_patch(patches))
+            reshape_patches = self.reshape_patch(patch=patches)
+            conv_proj = nn.Conv2d(in_channels=7, kernel_size=3, out_channels=8)
+            patch_proj = conv_proj(reshape_patches)
 
             # Applied SSP for get patch embedding using K-Means
             patch_emb = self.ssp(patch_proj)
