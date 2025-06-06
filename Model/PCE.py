@@ -8,13 +8,15 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 
 class PCENetwork(nn.Module):
     def __init__(self, 
-                 num_experts,
-                 kernel_sz_exps,
-                 output_cha_exps,
-                 layer_number,
-                 patch_size,
-                 router,
-                 dropout
+                    num_experts,
+                    kernel_sz_exps,
+                    output_cha_exps,
+                    layer_number,
+                    patch_size,
+                    router,
+                    dropout,
+                    threshold=0.2,
+                    enable_ema=True
                  ):
         super().__init__()
 
@@ -75,9 +77,11 @@ class PCENetwork(nn.Module):
             if l % 2 == 1:
                 output_cha_exps *= 2
 
-            self.thresholds.append(nn.Parameter(torch.tensor(0.1, dtype=torch.float32)))
+            self.thresholds.append(nn.Parameter(torch.tensor(threshold, dtype=torch.float32)))
 
         self.linear_layer = None
+
+        self.enable_ema = enable_ema
     
     def get_exp_scores(self,
                        B,
@@ -104,7 +108,7 @@ class PCENetwork(nn.Module):
         X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
 
         # get experts scores
-        exp_scores = self.router(X_patches_proj)
+        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx])
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores
@@ -133,22 +137,22 @@ class PCENetwork(nn.Module):
                 layer_idx
             )
 
-            print(f'expert scores : {exp_scores}')
-
             output = None
+            X_patches_flat = X_patches.reshape(B*P, C, pH, pW)
             for exp_idx, expert in enumerate(layer_experts):
                 # Get expert score
                 exp_score = exp_scores[:, :, exp_idx]
 
                 # Applies expert at patch, reshape dimension
-                out = expert(X_patches.reshape(B*P, C, pH, pW))
-                _, C_out, H_out, W_out = out.shape
-                out = out.reshape(B,P, C_out, H_out, W_out)
+                if exp_score.max() > self.thresholds[layer_idx].any():
+                    out = expert(X_patches_flat)
+                    _, C_out, H_out, W_out = out.shape
+                    out = out.reshape(B,P, C_out, H_out, W_out)
 
-                # Concatenation of the experts feature map with weighted sum
-                if output is None:
-                    output = torch.zeros(B, P, C_out, H_out, W_out)
-                output += out * exp_score.unsqueeze(2).unsqueeze(3).unsqueeze(4)
+                    # Concatenation of the experts feature map with weighted sum
+                    if output is None:
+                        output = torch.zeros(B, P, C_out, H_out, W_out)
+                    output += out * exp_score.unsqueeze(2).unsqueeze(3).unsqueeze(4)
 
             # Reassamble patch in in a single image [B, nP, C, H ,W] -> [B, C, H, W]
             # and applied final convolution 1x1 
@@ -169,4 +173,4 @@ class PCENetwork(nn.Module):
 
         logits = self.linear_layer(output)
 
-        return logits
+        return {'logits': logits, 'expert_scores': exp_scores}

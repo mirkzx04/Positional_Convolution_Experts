@@ -7,7 +7,7 @@ from torch import nn
 from .SSP import SSP
 
 class Router(nn.Module):
-    def __init__(self,num_experts, out_channel_key):
+    def __init__(self,num_experts, out_channel_key, enabled_ema=True, ema_alpha=0.99):
         super().__init__()
         """
         Router constructor
@@ -21,7 +21,9 @@ class Router(nn.Module):
 
         self.ssp = SSP()
 
-    def forward(self, patch, threshold):
+        self.ema_alpha = ema_alpha
+
+    def forward(self, patch, threshold, enable_ema=True):
         """
         Forward method of Router
 
@@ -31,6 +33,10 @@ class Router(nn.Module):
         patch_emb = self.ssp(patch)
         patch_emb = F.normalize(patch_emb, dim=-1)
         
+        if not enable_ema and not isinstance(self.keys, nn.Parameter):
+            # Clone keys in trainable parameter if not using EMA
+            self.keys = nn.Parameter(self.keys.clone().detach(), requires_grad=True)
+
         # Compute cosine simlarity between patch embedding and keys
         logits = patch_emb @ self.keys.T
 
@@ -39,6 +45,10 @@ class Router(nn.Module):
         mask = weights > threshold
         weights = weights * mask.float()
         weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-8)
+
+        if enable_ema:
+            # Update keys with exponential moving average
+            self.ema(patch_emb, weights)
 
         return weights
 
@@ -69,6 +79,34 @@ class Router(nn.Module):
             # Normalize centroids
             keys = torch.tensor(centroids, dtype=torch.float32)
             self.keys = F.normalize(keys, dim=-1)
+
+    def ema(self, patch_embedding, weights):
+        """
+        Exponential moving average for update keys
+
+        Args:
+            patch_embedding -> Tensor (B x nP, C + 4)
+        """
+        with torch.no_grad():
+            for expert_idx in range(self.num_experts):
+                expert_weights = weights[:, expert_idx]
+
+                # Only update is some patches are assigned to this expert
+                if expert_weights.sum() > 0:
+                    # Compute weighted centroid of patches assigned to this expert
+                    weighted_patches = patch_embedding * expert_weights.unsqueeze(-1)
+                    weighted_centroid = weighted_patches.sum(dim=0) / (expert_weights.sum() + 1e-8)
+
+                    # Normalize the centroid
+                    weighted_centroid = F.normalize(weighted_centroid, dim=-1)
+
+                    # Update the EMA keys for this expert
+                    self.keys.data[expert_idx] = (
+                        self.ema_alpha * self.keys.data[expert_idx] +
+                        (1 - self.ema_alpha) * weighted_centroid
+                    )
+
+                    self.keys.data[expert_idx] = F.normalize(self.keys.data[expert_idx], dim=-1)
 
     def reshape_patch(self, patch):
         # Reshape patches from (B, P, C + 2, H, W) to (BxP, (C + 2), H, W)
