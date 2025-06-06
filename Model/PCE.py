@@ -9,8 +9,8 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 class PCENetwork(nn.Module):
     def __init__(self, 
                  num_experts,
-                 kernel_sz_experts,
-                 out_cha_experts,
+                 kernel_sz_exps,
+                 output_cha_exps,
                  layer_number,
                  patch_size,
                  router,
@@ -22,8 +22,8 @@ class PCENetwork(nn.Module):
         Constructor of PCE Network
 
         Args : 
-            kernel_sz_experts -> kernel size of experts
-            out_cha_experts -> out channel for convolution in experts
+            kernel_sz_exps -> kernel size of experts
+            out_cha_exps -> out channel for convolution in experts
             num_experts -> Number of experts per layer
             out_cha_router -> out channel for conv projection in router
             layer_number -> Numer of layers
@@ -31,50 +31,53 @@ class PCENetwork(nn.Module):
         """
 
         self.router = router
-        self.out_channel_exp = out_cha_experts
 
         self.patch_extractor = PatchExtractor(patch_size)
 
-        # Create layers and experts of layers
+        # Defines layers and your experts + final convolution of the layer 
+        # Defines convolution for pixel projection for the SSP embeddigs, used in router
         self.layers = nn.ModuleList()
-        self.final_conv = nn.ModuleList()
+        self.final_conv = nn.ModuleList()        
         self.convs_proj = nn.ModuleList()
-        out_cha_key, in_channel = 7, 7
+        self.thresholds = nn.ParameterList()
+
+        output_cha_exps = output_cha_exps
+        input_cha_keys, input_cha_exps = 7,7  # 3 channels + 4 positional information
+
         for l in range(layer_number):
-            experts_layer = nn.ModuleList([
+            # Defines all convolution parts of the layer, including experts
+            experts = nn.ModuleList([
                 ConvExpert(
-                    kernel_size=kernel_sz_experts,
-                    in_channel=in_channel,
-                    out_channel=out_cha_experts,
+                    kernel_size=kernel_sz_exps,
+                    in_channel=input_cha_exps,
+                    out_channel=output_cha_exps,
                     dropout=dropout
-                    )
-                for _ in range(num_experts)])
-            self.layers.append(experts_layer)
-            self.final_conv.append(
-                nn.Conv2d(
-                    kernel_size=1, 
-                    in_channels=out_cha_experts, 
-                    out_channels=out_cha_experts
-                    )
-                )
-            self.convs_proj.append(
-                nn.Conv2d(kernel_size=3, 
-                    in_channels=7, 
-                    out_channels=8
-                    )
-                )
+                ) for _ in range(num_experts)
+            ])
+            self.layers.append(experts)
 
-            in_channel += 4
-            out_cha_key += 4
-            out_cha_experts += 4
+            self.final_conv.append(nn.Conv2d(
+                in_channels=output_cha_exps,
+                out_channels=output_cha_exps,
+                kernel_size=1,
+                padding=4
+            ))
+            self.convs_proj.append(nn.Conv2d(
+                in_channels=input_cha_keys,
+                out_channels=8,
+                kernel_size=3,
+                padding=1
+            ))
+
+            # Update input  and output channel for next layer
+            input_cha_exps = output_cha_exps + 4 # 4 positional information
+            input_cha_keys = output_cha_exps + 4
             if l % 2 == 1:
-                in_channel *= 2
-                out_cha_experts *= 2
-                out_cha_key *= 2
+                output_cha_exps *= 2
 
-        print(f'expert in layers : {self.layers}')
+            self.thresholds.append(nn.Parameter(torch.tensor(0.1, dtype=torch.float32)))
 
-        self.linear_layer = nn.Linear(out_cha_experts, out_features=10)
+        self.linear_layer = None
     
     def get_exp_scores(self,
                        B,
@@ -98,15 +101,13 @@ class PCENetwork(nn.Module):
         """
         # Reshape from (B,C,H,W) -> (BxC, H, W) and project pixel
         X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
-        print(f'X_patches : {X_patches.shape}')
         X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
 
         # get experts scores
         exp_scores = self.router(X_patches_proj)
-        exp_scores = exp_scores.reshape(B,P,-1)
+        exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores
-
 
     def forward(self, X):
         """
@@ -118,9 +119,8 @@ class PCENetwork(nn.Module):
 
         for layer_idx, layer_experts in enumerate(self.layers):
             # Divides feature map / input img in patches
-            X_patches = self.patch_extractor(X)
+            X_patches, h_patches, w_patches = self.patch_extractor(X)
             B, P, C, pH, pW = X_patches.shape
-            print(f'X_patches : {X_patches.shape}')
 
             # Take experts scores
             exp_scores = self.get_exp_scores(
@@ -133,12 +133,13 @@ class PCENetwork(nn.Module):
                 layer_idx
             )
 
+            print(f'expert scores : {exp_scores}')
+
             output = None
             for exp_idx, expert in enumerate(layer_experts):
                 # Get expert score
                 exp_score = exp_scores[:, :, exp_idx]
 
-                print(f'Experts input : {X_patches.reshape(B*P, C, pH, pW).shape}')
                 # Applies expert at patch, reshape dimension
                 out = expert(X_patches.reshape(B*P, C, pH, pW))
                 _, C_out, H_out, W_out = out.shape
@@ -148,28 +149,24 @@ class PCENetwork(nn.Module):
                 if output is None:
                     output = torch.zeros(B, P, C_out, H_out, W_out)
                 output += out * exp_score.unsqueeze(2).unsqueeze(3).unsqueeze(4)
-            
+
             # Reassamble patch in in a single image [B, nP, C, H ,W] -> [B, C, H, W]
-            # and applied final convolution 1x1
+            # and applied final convolution 1x1 
             output = rearrange(
                 output, 
                 'b (h w) c ph pw -> b c (h ph) (w pw)',
-                h = 8,
-                w = 8
+                h = h_patches,
+                w = w_patches
             )
-            print(f'Feature map reconstruction : {output.shape}')
             output = self.final_conv[layer_idx](output)
-            print(f'output layer : {output.shape}')
 
             X = output
+
+        # Create, if not exists, linear layer for classification
+        if self.linear_layer is None:
+            B, C, H_out, W_out = output.shape
+            self.linear_layer = nn.Linear(C * H_out * W_out, self.num_classes)
 
         logits = self.linear_layer(output)
 
         return logits
-
-
-
-
-
-        
-

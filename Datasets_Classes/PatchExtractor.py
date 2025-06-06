@@ -1,7 +1,8 @@
-from einops import rearrange, repeat
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from einops import rearrange, repeat
 
 class PatchExtractor(nn.Module):
     def __init__(self, patch_size):
@@ -20,6 +21,14 @@ class PatchExtractor(nn.Module):
         """
         coords = []
         B, C, H, W = image.shape
+
+        # Applied padding
+        pad_h = (self.patch_size - (H % self.patch_size)) % self.patch_size
+        pad_w = (self.patch_size - (W % self.patch_size)) % self.patch_size
+        image = F.pad(image, (0, pad_w, 0, pad_h), mode='constant', value=0)
+
+        H += pad_h
+        W += pad_w
 
         # Extract patch
         patches = rearrange(image,
@@ -57,4 +66,4 @@ class PatchExtractor(nn.Module):
         patches = patches.to(image.device)
         patches_with_coords = torch.cat([patches, coords, xx, yy], dim=2)  # (B, P, C + 4, p, p)
 
-        return patches_with_coords
+        return patches_with_coords, h_patches, w_patches

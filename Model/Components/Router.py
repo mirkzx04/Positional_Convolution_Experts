@@ -21,7 +21,7 @@ class Router(nn.Module):
 
         self.ssp = SSP()
 
-    def forward(self, patch):
+    def forward(self, patch, threshold):
         """
         Forward method of Router
 
@@ -33,8 +33,13 @@ class Router(nn.Module):
         
         # Compute cosine simlarity between patch embedding and keys
         logits = patch_emb @ self.keys.T
-        
+
+        # Calc softmax weights and applied threshold
         weights = F.softmax(logits, dim=-1)
+        mask = weights > threshold
+        weights = weights * mask.float()
+        weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-8)
+
         return weights
 
     def initialize_keys(self, patches):

@@ -17,7 +17,6 @@ class SSP(nn.Module):
 
     def forward(self, X):
         features = []
-        print(f'X in SSP {X.shape}')
         for pool in self.pools:
             pooled = pool(X)
             features.append(pooled.view(X.shape[0], - 1))
