@@ -17,7 +17,6 @@ class PCEScheduler(_LRScheduler):
             phase_multipliers (list): Multipliers for the learning rate in each phase.
             last_epoch (int): The index of the last epoch. Default is -1, which means the scheduler starts from the beginning.
         """
-        super().__init__(optimizer, last_epoch)
 
         self.phase_epochs = phase_epochs
         self.base_lr = base_lr
@@ -25,6 +24,8 @@ class PCEScheduler(_LRScheduler):
 
         # Defines the boundaries for each phase based on the provided epochs
         self.phase_boundaries = [sum(phase_epochs[:i+1]) for i in range(len(phase_epochs))]
+
+        super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
         """

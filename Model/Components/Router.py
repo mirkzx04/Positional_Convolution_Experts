@@ -29,6 +29,12 @@ class Router(nn.Module):
 
         Args : 
             patch -> tensor (B x nP, C + 4, nH, nW)
+            threshold -> float, threshold for experts scores
+            enable_ema -> bool, enable or disable exponential moving average for keys
+        
+        Returns:
+            weights -> Tensor (B x nP, num_experts)
+            where B is batch size, nP is number of patches, num_experts is number of experts in layer
         """
         patch_emb = self.ssp(patch)
         patch_emb = F.normalize(patch_emb, dim=-1)
@@ -59,6 +65,9 @@ class Router(nn.Module):
         Args : 
             patches -> Tensor (B, number_patch, C + 2, H, W)
                     where C + 2 is positional information and H = W = patch_size
+        Returns:
+            None, but initialize keys as nn.Parameter with shape (num_experts, C + 4)
+            where C + 4 is number of channels in patch embedding (C + 2 positional information + 2 pixel coordinates)
         """
 
         with torch.no_grad():
@@ -86,6 +95,10 @@ class Router(nn.Module):
 
         Args:
             patch_embedding -> Tensor (B x nP, C + 4)
+            weights -> Tensor (B x nP, num_experts)
+                where B is batch size, nP is number of patches, num_experts is number of experts in layer
+        Returns:
+            None, but update keys in place
         """
         with torch.no_grad():
             for expert_idx in range(self.num_experts):

@@ -30,6 +30,10 @@ class PCENetwork(nn.Module):
             out_cha_router -> out channel for conv projection in router
             layer_number -> Numer of layers
             dropout -> dropout probability of the convolution experts
+            patch_size -> Size of patches, used in PatchExtractor
+            router -> Router object, used for routing through experts
+            threshold -> Threshold for experts scores, used in router
+            enable_ema -> Enable or disable exponential moving average for router keys
         """
 
         self.router = router
@@ -102,6 +106,10 @@ class PCENetwork(nn.Module):
             pW -> Patch width
             X_patches -> Feature map, tensor (B, P, C, nH, nW)
             layer_idx -> index of current layer
+
+        Returns:
+            exp_scores -> tensor (B, P, num_experts)
+            where num_experts is the number of experts in the layer
         """
         # Reshape from (B,C,H,W) -> (BxC, H, W) and project pixel
         X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
@@ -119,6 +127,25 @@ class PCENetwork(nn.Module):
 
         Args :
             X -> input of network, tensor (B,C,H,W)
+
+        Pipeline of PCE Network:
+            1. Divide input img/feature map in patches
+            2. For each layer:
+                2.1. Extract patches from input img/feature map
+                2.2. Get experts scores from router
+                2.3. For each expert:
+                    2.3.1. Apply expert to patches
+                    2.3.2. Concatenate experts outputs with weighted sum
+                2.4. Reassemble patches in a single image
+                2.5. Apply final convolution 1x1 to the output of the layer
+            3. Create linear layer for classification if not exists
+            4. Return logits and expert scores
+
+        Returns:
+            dict -> {'logits': logits, 'expert_scores': exp_scores}
+        logits -> tensor (B, num_classes)
+        exp_scores -> tensor (B, P, num_experts)
+        where P is the number of patches and num_experts is the number of experts in the layer
         """
 
         for layer_idx, layer_experts in enumerate(self.layers):
@@ -173,4 +200,4 @@ class PCENetwork(nn.Module):
 
         logits = self.linear_layer(output)
 
-        return {'logits': logits, 'expert_scores': exp_scores}
+        return logits

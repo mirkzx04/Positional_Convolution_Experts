@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -19,8 +20,11 @@ class PatchExtractor(nn.Module):
         returns :
             patches : tensor (B, num_patches, C, patch_size x patch_size)
         """
+        if isinstance(image, np.ndarray):
+            image = torch.from_numpy(image)
+            
         coords = []
-        B, C, H, W = image.shape
+        B, _, H, W = image.shape
 
         # Applied padding
         pad_h = (self.patch_size - (H % self.patch_size)) % self.patch_size
