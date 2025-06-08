@@ -1,6 +1,12 @@
 import torch
 import wandb as wb
 
+import os
+import tarfile
+import requests
+import zipfile
+import shutil
+import urllib.request
 import pandas as pd
 import numpy as np 
 import matplotlib.pyplot as plt
@@ -8,13 +14,80 @@ import matplotlib.pyplot as plt
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
-from Datasets_Classes.Cifar10 import CIFAR10Dataset
+from zipfile import ZipFile
+
+from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
+from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
+from Datasets_Classes.PascalVOC import PascalVOCDataset, PascalVOCTrainDataset, PascalVOCValidationDataset
 from Datasets_Classes.PatchExtractor import PatchExtractor
 
 from Model.PCE import PCENetwork
 from Model.Components.Router import Router
+
 from PCEScheduler import PCEScheduler
 from TrainModel import TrainModel
+
+def download_tiny_imagenet():
+    """
+    Download the Tiny ImageNet dataset.
+    """
+    import os
+    import requests
+    from zipfile import ZipFile
+
+    url = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+    filename = "tiny-imagenet-200.zip"
+    tiny_dir = "./Data/tiny-imagenet-200"
+
+    if os.path.exists(tiny_dir):
+        print("Tiny ImageNet dataset already exists.")
+        return tiny_dir
+    
+    print("Downloading Tiny ImageNet dataset...")
+
+    try:
+        urllib.request.urlretrieve(url, filename)
+        print("Download complete.")
+
+        print("Extracting Tiny ImageNet dataset...")
+        with tarfile.open(filename, "r:gz") as tar:
+            tar.extractall(path="./Data")
+
+        os.remove(filename)  # Remove the zip file after extraction
+        print("Extraction complete.")
+        return tiny_dir
+    except Exception as e:
+        print(f"An error occurred while downloading or extracting the dataset: {e}")
+        return None
+
+def download_pascal_voc():
+    """
+    Download the Pascal VOC dataset.
+    """
+    url = "http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar"
+    filename = "VOCtrainval_11-May-2012.tar"
+    pascal_dir = "./Data/Pascal_VOC"
+
+    if os.path.exists(pascal_dir):
+        print("Pascal VOC dataset already exists.")
+        return pascal_dir
+    
+    print("Downloading Pascal VOC dataset...")
+
+    try:
+        urllib.request.urlretrieve(url, filename)
+        print("Download complete.")
+
+        print("Extracting Pascal VOC dataset...")
+        with tarfile.open(filename, "r") as tar:
+            tar.extractall(path="./Data")
+
+        os.remove(filename)  # Remove the tar file after extraction
+        print("Extraction complete.")
+        return pascal_dir
+    except Exception as e:
+        print(f"An error occurred while downloading or extracting the dataset: {e}")
+        return None
 
 def setup_wandb(
         project_name="PCE",
@@ -74,40 +147,67 @@ def router_variance_loss(expert_weights, variance_weight = 0.01):
     # Return the weighted variance loss
     return variance_weight * torch.sum(variance)
 
-def split_dataset(dataset, train_ratio = 0.8, val_ratio = 0.2):
+def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py/data_batch_'):
     """
-    Split dataset into training, validation, and test sets.
-    
+    Initialize the CIFAR-10 dataset and create DataLoaders for training and validation.
+
     Args:
-        dataset (Any dataset): The any dataset.
-        train_ratio (float): Ratio of training data.
-        val_ratio (float): Ratio of validation data.
-        
-    Returns:
-        tuple: Training, validation, and test datasets.
+        cifar10_path : Path of the CIFAR-10 dataset
     """
-    total_size = dataset.__len__()
-    train_size = int(total_size * train_ratio)
-    val_size = int(total_size * val_ratio)
-    test_size = total_size - train_size - val_size
-    
-    train_set, val_set, test_set = torch.utils.data.random_split(
-        dataset, [train_size, val_size, test_size]
-    )
-    
-    return train_set, val_set, test_set
+    print('-- Initializing the CIFAR-10 dataset... -- ')
+    # Create CIFAR-10 dataset
+    cifar10 = CIFAR10Dataset(cifar10_path)
+    cifar10_train_set = CIFAR10TrainDataset(cifar10)
+    cifar10_val_set = CIFAR10ValidationDataset(cifar10)
+
+    # Create DataLoader for CIFAR-10 training and validation datasets
+    cifar10_train_dataloader = DataLoader(cifar10_train_set, batch_size=batch_size, shuffle=True)
+    cifar10_val_dataloader = DataLoader(cifar10_val_set, batch_size=batch_size, shuffle=False)
+
+    cifar10_dict = {
+        'datasets': {
+            'train': cifar10_train_set,
+            'val': cifar10_val_set,
+        },
+        'dataloaders': {
+            'train': cifar10_train_dataloader,
+            'val': cifar10_val_dataloader
+        },
+        'name' : 'CIFAR10'
+    }
+
+    return cifar10_dict
+
+def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-200'):
+    """
+    Initialize the Tiny-ImageNet dataset and create Dataloaders for training and validation
+
+    Args:
+        tinyimagenet_path : Path of the Tiny-ImageNet dataset
+    """
+
+    tiny_image_net = TinyImageNetDataset(tinyimagenet_path)
+    tiny_image_net_train_set = TinyImageNetTrainDataset(tiny_image_net)
+    tiny_image_net_val_set = TinyImageNetValidationDataset(tiny_image_net)
+
+    tiny_image_net_train_dataloader = DataLoader(dataset=tiny_image_net_train_set, batch_size=batch_size, shuffle=True)
+    tiny_image_net_val_dataloader = DataLoader(dataset=tiny_image_net_val_set, batch_size=batch_size, shuffle=False)
+
+    tiny_image_net_dic = {
+        'datasets' : {
+            'train' : tiny_image_net_train_set,
+            'val': tiny_image_net_val_set
+        },
+        'dataloader' : {
+            'train' : tiny_image_net_train_dataloader,
+            'val' : tiny_image_net_val_dataloader
+        }
+    }
+
+    return tiny_image_net_dic
 
 if __name__ == "__main__":
     train_datasets = []
-
-    print('-- Initializing the CIFAR-10 dataset... -- ')
-    # Create CIFAR-10 dataset
-    cifar10 = CIFAR10Dataset('./Data/cifar-10-batches-py/data_batch_')
-    
-    # Split cifar10 dataset into train, validation, and test sets
-    cifar10_train, cifar10_val, cifar10_test = split_dataset(cifar10)
-    cifar10_train_set, cifar10_val_set, cifar10_test_set = cifar10_train.dataset, cifar10_val.dataset, cifar10_test.dataset
-    print('-- CIFAR-10 dataset initialized -- ')
 
     # Hyperparameters of model
     num_exp = 4
@@ -138,7 +238,18 @@ if __name__ == "__main__":
         'weight_decay': weight_decay,
     }
 
-    # # Create DataLoader for training and validation
+    # # Create DataLoader for training and validation of all datasets
+    # Load Cifar-10 Sets
+    cifar10_sets = get_cifar10_sets()
+    train_datasets.append(cifar10_sets)
+
+    # Load TinyImageNet sets
+    tinyimagenet_sets = get_tinyimagenet_sets()
+    train_datasets.append(tinyimagenet_sets)
+    
+    # Load pascalvoc sets
+    # pascalvoc_sets = get_pascalvoc_sets()
+    # train_datasets.append(pascalvoc_sets)
     # # Setup wandb for logging
     # logger = setup_wandb(
     #     project_name="PCE",
@@ -158,21 +269,7 @@ if __name__ == "__main__":
     # )
     print('-- extracting patches from CIFAR-10 dataset... -- ')
     patch_esxtractor = PatchExtractor(patch_size=patch_size)
-    print('-- Patches extracted from CIFAR-10 dataset -- ')
-
-    # Create dictionary for CIFAR-10 dataset and append in train_datasets list for training class
-    cifar10_dict = {
-        'datasets': {
-            'train': cifar10_train,
-            'val': cifar10_val,
-        },
-        'dataloaders': {
-            'train': DataLoader(cifar10_train, batch_size=batch_size, shuffle=True),
-            'val': DataLoader(cifar10_val, batch_size=batch_size, shuffle=False),
-        },
-        'name' : 'CIFAR10'
-    }
-    train_datasets.append(cifar10_dict)
+    print('-- Patches extracted from CIFAR-10 dataset -- ')    
 
     # Initialize the router with the number of experts and initialize model
     # with the router and other parameters

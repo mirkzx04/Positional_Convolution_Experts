@@ -8,6 +8,7 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 
 class PCENetwork(nn.Module):
     def __init__(self, 
+                    inpt_channel,
                     num_experts,
                     kernel_sz_exps,
                     output_cha_exps,
@@ -48,7 +49,7 @@ class PCENetwork(nn.Module):
         self.thresholds = nn.ParameterList()
 
         output_cha_exps = output_cha_exps
-        input_cha_keys, input_cha_exps = 7,7  # 3 channels + 4 positional information
+        input_cha_keys, input_cha_exps = inpt_channel, inpt_channel  # 3 channels + 4 positional information
 
         for l in range(layer_number):
             # Defines all convolution parts of the layer, including experts
