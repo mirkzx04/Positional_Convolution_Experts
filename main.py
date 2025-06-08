@@ -18,7 +18,7 @@ from zipfile import ZipFile
 
 from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
 from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
-from Datasets_Classes.PascalVOC import PascalVOCDataset, PascalVOCTrainDataset, PascalVOCValidationDataset
+# from Datasets_Classes.PascalVOC import PascalVOCDataset, PascalVOCTrainDataset, PascalVOCValidationDataset
 from Datasets_Classes.PatchExtractor import PatchExtractor
 
 from Model.PCE import PCENetwork
@@ -246,62 +246,72 @@ if __name__ == "__main__":
     # Load TinyImageNet sets
     tinyimagenet_sets = get_tinyimagenet_sets()
     train_datasets.append(tinyimagenet_sets)
+
+    patch_esxtractor = PatchExtractor(patch_size=patch_size)
+
     
     # Load pascalvoc sets
     # pascalvoc_sets = get_pascalvoc_sets()
     # train_datasets.append(pascalvoc_sets)
-    # # Setup wandb for logging
-    # logger = setup_wandb(
-    #     project_name="PCE",
-    #     num_exp=num_exp,
-    #     kernel_size=kernel_size,
-    #     out_channel_exp=out_channel_exp,
-    #     out_channel_rout=out_channel_rout,
-    #     layer_number=layer_number,
-    #     patch_size=patch_size,
-    #     lr=lr,
-    #     batch_size=batch_size,
-    #     epochs=epochs,
-    #     dropout=dropout,
-    #     ema_alpha=ema_alpha,
-    #     weight_decay=weight_decay,
-    #     threshold=threshold
-    # )
-    print('-- extracting patches from CIFAR-10 dataset... -- ')
-    patch_esxtractor = PatchExtractor(patch_size=patch_size)
-    print('-- Patches extracted from CIFAR-10 dataset -- ')    
 
-    # Initialize the router with the number of experts and initialize model
-    # with the router and other parameters
-    print('-- Initializing the router and model... -- ')
-    fake_dataset_patches, _, _ = patch_esxtractor(cifar10_train_set.data[:10, :, :, :])  # Extract patches from the first 10 images for router initialization
-    router = Router(num_experts=num_exp, out_channel_key=out_channel_exp)
-    router.initialize_keys(fake_dataset_patches)
-
-    model = PCENetwork(
-        num_experts = num_exp,
-        kernel_sz_exps = kernel_size,
-        output_cha_exps = out_channel_exp,
-        layer_number = layer_number,
-        patch_size = patch_size,
-        router=router,
-        dropout=0.1,
-        threshold=threshold,
-        enable_ema=True
-    )
-    print('-- Router and model initialized -- ')
-    # # Initialize the train model class
-    train_model = TrainModel(
-        datasets=train_datasets,
-        model=model,
-        logger=None,
-        config = train_config,
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Setup wandb for logging
+    logger = setup_wandb(
+        project_name="PCE",
+        num_exp=num_exp,
+        kernel_size=kernel_size,
+        out_channel_exp=out_channel_exp,
+        out_channel_rout=out_channel_rout,
+        layer_number=layer_number,
+        patch_size=patch_size,
+        lr=lr,
+        batch_size=batch_size,
+        epochs=epochs,
+        dropout=dropout,
+        ema_alpha=ema_alpha,
+        weight_decay=weight_decay,
+        threshold=threshold
     )
 
-    print('-- Checking train function ... --')
-    train_model.train(
-        model=model,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        train_checkpoints_path='./checkpoints',
-    )
+    for dataset_idx, dataset in enumerate(train_datasets):
+        
+        # Define dataset and dataloader
+        train_dataset = dataset['datasets']['train']
+        
+        train_loader = dataset['dataloader']['train']
+        validation_loader = dataset['dataloader']['val']
+
+        # Divides current dataset for initialize keys and setting input channel for model
+        dataset_patch, _, _ = patch_esxtractor(train_dataset.data)  # Extract patches from the first 10 images for router initialization
+        _, _, C, _, _ = dataset_patch.shape
+        
+        router = Router(num_experts=num_exp, out_channel_key=out_channel_exp)
+        router.initialize_keys(dataset_patch)
+
+        model = PCENetwork(
+            inpt_channel=C,
+            num_experts = num_exp,
+            kernel_sz_exps = kernel_size,
+            output_cha_exps = out_channel_exp,
+            layer_number = layer_number,
+            patch_size = patch_size,
+            router=router,
+            dropout=0.1,
+            threshold=threshold,
+            enable_ema=True
+        )
+        print('-- Router and model initialized -- ')
+
+        # # Initialize the train model class
+        train_model = TrainModel(
+            model=model,
+            logger=None,
+            config = train_config,
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        )
+
+        print('-- Checking train function ... --')
+        train_model.train(
+            model=model,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            train_checkpoints_path='./checkpoints',
+        )

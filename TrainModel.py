@@ -8,8 +8,12 @@ from tqdm import tqdm
 
 from PCEScheduler import PCEScheduler
 
+from Model.Components.Router import Router
+
+from Datasets_Classes.PatchExtractor import PatchExtractor
+
 class TrainModel:
-    def __init__(self, model, datasets,logger, config):
+    def __init__(self,logger, train_config, model, device):
         """
         Initialize the TrainModel class.
         This class is responsible for training the model.
@@ -19,11 +23,10 @@ class TrainModel:
             logger (wandb.Logger): Logger for tracking experiments.
             cofig (dict): Configuration dictionary containing training parameters.
         """
-
+        self.device = device
         self.model = model
-        self.datasets = datasets
         self.logger = logger
-        self.config = config
+        self.train_config = train_config
 
         # Settings loss function, optimizer and LR scheduler
         self.criterion = torch.nn.CrossEntropyLoss()
@@ -47,7 +50,6 @@ class TrainModel:
         Check if the checkpoint directory exists, if not create it.
 
         Args:
-            model (nn.Module): The model to be trained.
             train_checkpoints_path (str): Path to save and load model checkpoints.
         """
 
@@ -55,6 +57,7 @@ class TrainModel:
         if os.path.exists(f'{train_checkpoints_path}/model_checkpoints.pth'):
             print("Loading model from checkpoint...")
             self.model.load_state_dict(torch.load(f'{train_checkpoints_path}/model.pth'))
+            print("Model loaded successfully.")
         else:
             print("No checkpoint found, starting training from scratch...")
 
@@ -64,7 +67,6 @@ class TrainModel:
             train_checkpoint = torch.load(f'{train_checkpoints_path}/train_checkpoints.pth')
             start_epoch = train_checkpoint['current_epoch']
             start_batch_training = train_checkpoint['batch_training']
-            start_batch_validation = train_checkpoint['batch_validation']
 
             # Load losses history
             train_loss_history = train_checkpoint['train_loss_history']
@@ -73,6 +75,10 @@ class TrainModel:
             # Load the optimizer and LR scheduler state
             self.optimizer.load_state_dict(train_checkpoint['optimizer'])
             self.LR_scheduler.load_state_dict(train_checkpoint['scheduler'])
+
+            print(f'Resuming training from epoch {start_epoch}, '
+                  f'training batch {start_batch_training}, '
+                  f'validation batch {start_batch_validation}...')
             
         else:
             print("No training checkpoints found, starting training from scratch...")
@@ -83,62 +89,52 @@ class TrainModel:
             train_loss_history = []
             val_loss_history = []
 
-        return start_epoch, start_batch_training, start_batch_validation, train_loss_history, val_loss_history
+        return start_epoch, start_batch_training, train_loss_history, val_loss_history
     
-    def train(self, device, train_checkpoints_path = './checkpoints'):
-
+    def train(self, training_loader, validation_loader, train_checkpoints_path = './checkpoints'):
         """
         Train the model using the provided datasets and configurations.
 
         Args:
-            model (nn.Module): The model to be trained.
-            device (torch.device): The device to run the training on (CPU or GPU).
             train_checkpoints_path (str): Path to save and load model checkpoints.
+            training_loader (DataLoader): DataLoader for the training dataset.
+            validation_loader (DataLoader): DataLoader for the validation dataset.
         """
         # Set the datasets used for training and validation
-        training_datasets = self.datasets[0]['dataloaders']['train']
-        validation_datasets = self.datasets[0]['dataloaders']['val']
-        # Check if the checkpoint directory exists, if not create it.
-        start_epoch, start_batch_train, start_batch_val, train_loss_history, val_loss_history  = self.check_checkpoints(train_checkpoints_path)
-        self.model.to(device)
-        # Training loop
-        
-        for epoch in tqdm(range(start_epoch, self.config['epochs']), desc="Training Epochs"):
-            self.upload_checkpoint(
-                current_epoch=epoch,
-                batch_training=start_batch_train,
-                batch_validation=start_batch_val,
-                train_loss_history=train_loss_history,
-                val_loss_history=val_loss_history
-            )
+        training_datasets = training_loader
+        validation_loader = validation_loader
 
-            # Set model to training mode
+        # Check if the checkpoint directory exists, if not create it.
+        start_epoch, start_batch_train, train_loss_history, val_loss_history  = self.check_checkpoints(train_checkpoints_path)
+        
+        self.model.to(self.device)
+
+        # Training loop
+        for epoch in tqdm(range(start_epoch, self.config['epochs']), desc="Training Epochs"):
+            # Set model to training mode and reset losses
             self.model.train()
 
             train_loss = 0
             val_loss = 0
 
             training_batches = list(enumerate(training_datasets))
-            start_batch_idx = start_batch_train if epoch == start_epoch else 0
+            current_batch_start = start_batch_train if epoch == start_epoch else 0
 
-            validation_batches = list(enumerate(validation_datasets))
-            start_batch_val = start_batch_val if epoch == start_epoch else 0
-
-            if start_batch_idx > 0:
-                training_batches = training_batches[start_batch_idx:]
+            if current_batch_start > 0:
+                training_batches = training_batches[current_batch_start:]
+                print(f'Resuming training from batch {current_batch_start}...')
             
             # Training phase
             for batch_idx, batch in tqdm(training_batches, desc="Training Batches"):
                 self.upload_checkpoint(
                     current_epoch=epoch,
-                    batch_training=start_batch_train,
-                    batch_validation=start_batch_val,
+                    batch_training=actual_batch_idx,
                     train_loss_history=train_loss_history,
                     val_loss_history=val_loss_history
                 )
                 # Extract data and labels from the batch
                 data, labels = batch
-                data, labels = data.to(device), labels.to(device)
+                data, labels = data.to(self.device), labels.to(self.device)
 
                 # Forward pass
                 logits = self.model(data)
@@ -156,24 +152,17 @@ class TrainModel:
 
                 train_loss_history.append(loss.item())
 
-                start_batch_train += 1
+                actual_batch_idx = batch_idx + start_batch_train
 
             avg_train_loss = train_loss / len(training_batches)
 
             # Validation phase
             self.model.eval()
             with torch.no_grad():
-                for batch_idx, batch in tqdm(validation_batches, desc="Validation Batches"):
-                    self.upload_checkpoint(
-                        current_epoch=epoch,
-                        batch_training=start_batch_train,
-                        batch_validation=start_batch_val,
-                        train_loss_history=train_loss_history,
-                        val_loss_history=val_loss_history
-                    )
+                for batch_idx, batch in tqdm(validation_loader, desc="Validation Batches"):
                     # Extract data and labels from the batch
                     data, labels = batch
-                    data, labels = data.to(device), labels.to(device)
+                    data, labels = data.to(self.device), labels.to(self.device)
 
                     # Forward pass
                     logits = self.model(data)
@@ -182,16 +171,13 @@ class TrainModel:
                     loss = self.criterion(logits, labels)
                     val_loss += loss.item()
 
-                    start_batch_val += 1
-
-            avg_val_loss = val_loss / len(validation_batches)
+            avg_val_loss = val_loss / len(validation_loader)
 
             val_loss_history.append(avg_val_loss)
             train_loss_history.append(avg_train_loss)
 
-
     def upload_checkpoint(self,
-                          current_epoch, batch_training, batch_validation,
+                          current_epoch, batch_training,
                           train_loss_history, val_loss_history):
         """
         Upload the current model and training state to the checkpoint directory.
@@ -211,7 +197,6 @@ class TrainModel:
         torch.save({
             'current_epoch': current_epoch,
             'batch_training': batch_training,
-            'batch_validation': batch_validation,
             'train_loss_history': train_loss_history,
             'val_loss_history': val_loss_history,
             'optimizer': self.optimizer.state_dict(),
