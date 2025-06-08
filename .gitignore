@@ -10,3 +10,4 @@ wheels/
 .venv
 Data
 README_it.md
+wandb
