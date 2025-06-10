@@ -90,6 +90,7 @@ def download_pascal_voc():
         return None
 
 def setup_wandb(
+        current_dataset,
         project_name="PCE",
         num_exp=4,
         kernel_size=3,
@@ -125,6 +126,7 @@ def setup_wandb(
             'ema_alpha': ema_alpha,
             'weight_decay': weight_decay,
             'threshold': threshold,
+            'current dataset' : current_dataset
         }
     )  
 
@@ -222,9 +224,9 @@ if __name__ == "__main__":
     ema_alpha = 0.99
     threshold = 0.2
 
-    epochs = 150
-    pre_train_epochs = 100
-    fine_tune_epochs = 50
+    epochs = 250
+    pre_train_epochs = 150
+    fine_tune_epochs = 100
 
     batch_size = 32
 
@@ -254,6 +256,17 @@ if __name__ == "__main__":
     # pascalvoc_sets = get_pascalvoc_sets()
     # train_datasets.append(pascalvoc_sets)
 
+     # idx of the dataset : 
+        # 0 -> Cifar10
+        # 1 -> Tiny-ImageNet
+    dataset_idx = 0
+        
+    # Define dataset and dataloader
+    train_dataset = train_datasets[dataset_idx]['datasets']['train']
+    
+    train_loader = train_datasets[dataset_idx]['dataloader']['train']
+    validation_loader = train_datasets[dataset_idx]['dataloader']['val']
+
     # Setup wandb for logging
     logger = setup_wandb(
         project_name="PCE",
@@ -269,49 +282,42 @@ if __name__ == "__main__":
         dropout=dropout,
         ema_alpha=ema_alpha,
         weight_decay=weight_decay,
-        threshold=threshold
+        threshold=threshold,
+        current_dataset = train_datasets[dataset_idx]['name']
     )
 
-    for dataset_idx, dataset in enumerate(train_datasets):
-        
-        # Define dataset and dataloader
-        train_dataset = dataset['datasets']['train']
-        
-        train_loader = dataset['dataloader']['train']
-        validation_loader = dataset['dataloader']['val']
+    # Divides current dataset for initialize keys and setting input channel for model
+    dataset_patch, _, _ = patch_esxtractor(train_dataset.data)  # Extract patches from the first 10 images for router initialization
+    _, _, C, _, _ = dataset_patch.shape
+    
+    router = Router(num_experts=num_exp, out_channel_key=out_channel_exp)
+    router.initialize_keys(dataset_patch)
 
-        # Divides current dataset for initialize keys and setting input channel for model
-        dataset_patch, _, _ = patch_esxtractor(train_dataset.data)  # Extract patches from the first 10 images for router initialization
-        _, _, C, _, _ = dataset_patch.shape
-        
-        router = Router(num_experts=num_exp, out_channel_key=out_channel_exp)
-        router.initialize_keys(dataset_patch)
+    model = PCENetwork(
+        inpt_channel=C,
+        num_experts = num_exp,
+        kernel_sz_exps = kernel_size,
+        output_cha_exps = out_channel_exp,
+        layer_number = layer_number,
+        patch_size = patch_size,
+        router=router,
+        dropout=0.1,
+        threshold=threshold,
+        enable_ema=True
+    )
+    print('-- Router and model initialized -- ')
 
-        model = PCENetwork(
-            inpt_channel=C,
-            num_experts = num_exp,
-            kernel_sz_exps = kernel_size,
-            output_cha_exps = out_channel_exp,
-            layer_number = layer_number,
-            patch_size = patch_size,
-            router=router,
-            dropout=0.1,
-            threshold=threshold,
-            enable_ema=True
-        )
-        print('-- Router and model initialized -- ')
+    # # Initialize the train model class
+    train_model = TrainModel(
+        model=model,
+        logger=None,
+        config = train_config,
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    )
 
-        # # Initialize the train model class
-        train_model = TrainModel(
-            model=model,
-            logger=None,
-            config = train_config,
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        )
-
-        print('-- Checking train function ... --')
-        train_model.train(
-            model=model,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            train_checkpoints_path='./checkpoints',
-        )
+    print('-- Checking train function ... --')
+    train_model.train(
+        model=model,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        train_checkpoints_path='./checkpoints',
+    ) 
