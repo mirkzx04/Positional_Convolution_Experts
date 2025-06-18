@@ -4,7 +4,7 @@ import math
 from torch.optim.lr_scheduler import _LRScheduler
 
 class PCEScheduler(_LRScheduler):
-    def __init__(self, optimizer, phase_epochs, base_lr = 0.001, phase_multipliers = [1.0, 0.3,.01], last_epoch=-1):
+    def __init__(self, optimizer, phase_epochs, base_lr, phase_multipliers, last_epoch=-1):
         """
         Custom scheduler for PCE training phases:
         - Phase 1 (EMA) : Higher LR for fast convergence

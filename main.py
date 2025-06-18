@@ -1,20 +1,17 @@
 import torch
 import wandb as wb
+from tqdm import tqdm
 
 import os
 import tarfile
-import requests
-import zipfile
-import shutil
 import urllib.request
 import pandas as pd
 import numpy as np 
 import matplotlib.pyplot as plt
 
+from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-
-from zipfile import ZipFile
 
 from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
 from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
@@ -25,7 +22,8 @@ from Model.PCE import PCENetwork
 from Model.Components.Router import Router
 
 from PCEScheduler import PCEScheduler
-from TrainModel import TrainModel
+
+from DataAugmentation import DataAgumentation
 
 def download_tiny_imagenet():
     """
@@ -132,6 +130,24 @@ def setup_wandb(
 
     return wb.config
 
+def log_gradient_stats(model):
+    """Log statistiche sui gradienti"""
+    grad_stats = {}
+    total_grad_norm = 0
+    
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad_norm = torch.norm(param.grad.data).item()
+            grad_max = torch.max(torch.abs(param.grad.data)).item()
+            
+            grad_stats[f"grad_norm/{name}"] = grad_norm
+            grad_stats[f"grad_max/{name}"] = grad_max
+            total_grad_norm += grad_norm ** 2
+    
+    grad_stats["global/grad_norm"] = (total_grad_norm ** 0.5)
+    
+    wb.log(grad_stats)
+
 def router_variance_loss(expert_weights, variance_weight = 0.01):
     """
     Calculate the variance loss for the router weights.
@@ -208,6 +224,186 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
 
     return tiny_image_net_dic
 
+def model_checkpoints(train_checkpoints_path, model):
+    # Check if exist model checkpoint
+    if os.path.exists(f'{train_checkpoints_path}/model_checkpoints.pth'):
+        print(f'Loading model from checkpoint...')
+        model.load_state_dict(torch.load(f'{train_checkpoints_path}/model_checkpoints.pth'))
+
+        print('Model loaded from checkpoint')
+
+    else:
+        print('No model checkpoint founded')
+
+    return model
+
+def train_checkpoints(train_checkpoints_path, optimizer, lr_scheduler):
+    # Check if exist train params checkpoint, included scheduler and optimizer
+    if os.path.exists(f'{train_checkpoints_path}/train_checkpoints.pth'):
+        print('Load training params from checkpoint...')
+        checkpoint = torch.load(f'{train_checkpoints_path}/train_checkpoints.pth')
+
+        start_epoch = checkpoint['start_epoch']
+        start_train_batch = checkpoint['train_batch']
+
+        train_loss_history = checkpoint['train_history']
+        val_loss_history = checkpoint['val_history']
+
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        lr_scheduler.load_state_dict(checkpoint['scheduler'])
+
+        print(f'Resuming train from {start_epoch} epoch and {start_train_batch} train batch')
+        
+        return start_epoch, start_train_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler
+    else:
+        print('No train checkpoint founded')
+
+    return 0, 0, [], [], optimizer, lr_scheduler
+
+def save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, 
+                   epoch, batch_idx, train_loss_history, val_loss_history):
+    """Save model and training state"""
+
+    if not os.path.exists(train_checkpoints_path):
+        os.makedirs(train_checkpoints_path)
+    
+    # Save model
+    torch.save(model.state_dict(), f'{train_checkpoints_path}/model_checkpoints.pth')
+    
+    # Save training state
+    torch.save({
+        'start_epoch': epoch,
+        'train_batch': batch_idx,
+        'train_history': train_loss_history,
+        'val_history': val_loss_history,
+        'optimizer': optimizer.state_dict(),
+        'scheduler': lr_scheduler.state_dict()
+    }, f'{train_checkpoints_path}/train_checkpoints.pth')
+
+def training(
+        model, 
+        train_loader, 
+        val_loader, 
+        device,
+        epochs,
+        optimizer, 
+        lr_scheduler,
+        augmentation,
+        logger,
+        train_checkpoints_path = './checkpoints'):
+    
+    # Setting train and val loader
+    train_loader = train_loader
+    val_loader = val_loader
+    
+    # Set loss
+    criterion = nn.CrossEntropyLoss()
+
+    # Get train params from the last train checkpoint (if exist)
+    start_epoch, start_train_batch, train_loss_history, \
+    val_loss_history, optimizer, lr_scheduler = train_checkpoints(
+                                                    train_checkpoints_path,
+                                                    optimizer,
+                                                    lr_scheduler)
+
+    # Get model from the last model checkpoint (if exist)
+    model = model_checkpoints(train_checkpoints_path, model)
+    model.to(device)
+
+    save_every_n_batches = 5
+ 
+    # Start training
+    for epoch in tqdm(range(start_epoch, epochs)):
+        model.train()
+
+        train_loss = val_loss = 0
+        epoch_train_loss = 0
+        batch_count = 0
+
+        # Resume training from last batch save in to checkpoint
+        train_batches = list(enumerate(train_loader))
+        current_batch_start = start_train_batch if epoch == start_epoch else 0
+
+        if current_batch_start > 0:
+            train_batches = train_batches[current_batch_start:]
+
+        for batch_idx, (data, labels) in tqdm(train_batches, desc = 'Training batches'):
+
+            # Extract data and labels from batch
+            data, labels = data.to(device), labels.to(device)
+
+            # transform data with data augmentation
+            data = augmentation(data)
+
+            # Forward pass
+            logits = model(data)
+
+            # Compute loss and backward pass
+            loss = criterion(logits, labels)
+            train_loss += loss.item()
+
+            optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+            optimizer.step()
+            lr_scheduler.step()
+
+            # # Track losses
+            batch_loss = loss.item()
+            epoch_train_loss += batch_loss
+            train_loss_history.append(batch_loss)
+            batch_count += 1
+            
+            # Update actual batch idx
+            actual_batch_idx = batch_idx if epoch == start_epoch else batch_idx + start_train_batch
+            
+            if actual_batch_idx % save_every_n_batches == 0:
+                save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
+                              epoch, actual_batch_idx, train_loss_history, val_loss_history)
+        # Calculate avg train loss
+        avg_train_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
+        
+        # Validation phase
+        model.eval()
+        val_loss = 0
+        val_batches = 0
+        
+        with torch.no_grad():
+            for data, labels in tqdm(val_loader, desc='Validation batches'):
+                data, labels = data.to(device), labels.to(device)
+                
+                logits = model(data)
+                loss = criterion(logits, labels)
+                
+                val_loss += loss.item()
+                val_batches += 1
+        
+        avg_val_loss = val_loss / val_batches if val_batches > 0 else 0
+        val_loss_history.append(avg_val_loss)
+                
+        # Save checkpoint at end of epoch
+        save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
+                       epoch + 1, 0, train_loss_history, val_loss_history)
+        
+        # Reset batch counter for next epoch
+        start_train_batch = 0
+
+        current_lr = optimizer.param.groups[0]['lr']
+        
+        if batch_idx % 50 == 0:
+            wb.log({
+                'current epoch' : epoch,
+                'current batch' : batch_idx,
+                'batch_loss' : batch_loss,
+                'avg train loss' : avg_train_loss,
+                'avg val loss' : avg_val_loss,
+                'gradient norm ' : log_gradient_stats(model),
+
+            })
+    
+    print('Training completed!')
+    return model, train_loss_history, val_loss_history
+
 if __name__ == "__main__":
     train_datasets = []
 
@@ -227,6 +423,7 @@ if __name__ == "__main__":
     epochs = 250
     pre_train_epochs = 150
     fine_tune_epochs = 100
+    phase_multipliers = [1.0, 0.3]
 
     batch_size = 32
 
@@ -251,7 +448,6 @@ if __name__ == "__main__":
 
     patch_esxtractor = PatchExtractor(patch_size=patch_size)
 
-    
     # Load pascalvoc sets
     # pascalvoc_sets = get_pascalvoc_sets()
     # train_datasets.append(pascalvoc_sets)
@@ -293,6 +489,8 @@ if __name__ == "__main__":
     router = Router(num_experts=num_exp, out_channel_key=out_channel_exp)
     router.initialize_keys(dataset_patch)
 
+    # Initialize model, optimizer (Adam) and scheduler
+    # Loss initialize in training funcion (CrossEntropy)
     model = PCENetwork(
         inpt_channel=C,
         num_experts = num_exp,
@@ -307,17 +505,24 @@ if __name__ == "__main__":
     )
     print('-- Router and model initialized -- ')
 
-    # # Initialize the train model class
-    train_model = TrainModel(
-        model=model,
-        logger=None,
-        config = train_config,
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    )
+    optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    print('-- Checking train function ... --')
-    train_model.train(
+    lr_scheduler = PCEScheduler(
+        optimizer = optimizer, 
+        phase_epochs=[pre_train_epochs, fine_tune_epochs],
+        base_lr=lr,
+        phase_multipliers=phase_multipliers)
+    
+    augmentation = DataAgumentation()
+
+    training(
         model=model,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        train_checkpoints_path='./checkpoints',
-    ) 
+        train_loader=train_loader,
+        val_loader=validation_loader,
+        device= 'cuda' if torch.cuda.is_available() else 'cpu',
+        epochs=epochs,
+        optimizer=optimizer,
+        augmentation = augmentation,
+        logger=logger,
+        lr_scheduler=lr_scheduler,
+    )
