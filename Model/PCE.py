@@ -16,6 +16,7 @@ class PCENetwork(nn.Module):
                     patch_size,
                     router,
                     dropout,
+                    num_classes,
                     threshold=0.2,
                     enable_ema=True
                  ):
@@ -25,19 +26,20 @@ class PCENetwork(nn.Module):
         Constructor of PCE Network
 
         Args : 
-            kernel_sz_exps -> kernel size of experts
-            out_cha_exps -> out channel for convolution in experts
-            num_experts -> Number of experts per layer
-            out_cha_router -> out channel for conv projection in router
-            layer_number -> Numer of layers
-            dropout -> dropout probability of the convolution experts
-            patch_size -> Size of patches, used in PatchExtractor
-            router -> Router object, used for routing through experts
-            threshold -> Threshold for experts scores, used in router
-            enable_ema -> Enable or disable exponential moving average for router keys
+            kernel_sz_exps (int) -> kernel size of experts
+            out_cha_exps // -> out channel for convolution in experts
+            num_experts // -> Number of experts per layer
+            out_cha_router // -> out channel for conv projection in router
+            layer_number // -> Numer of layers
+            dropout (float) -> dropout probability of the convolution experts
+            patch_size (int) -> Size of patches, used in PatchExtractor
+            router (Object.router) -> Router object, used for routing through experts
+            threshold (float) -> Threshold for experts scores, used in router
+            enable_ema (bool) -> Enable or disable exponential moving average for router keys
         """
 
         self.router = router
+        self.num_classes = num_classes
 
         self.patch_extractor = PatchExtractor(patch_size)
 
@@ -100,13 +102,13 @@ class PCENetwork(nn.Module):
         Get experts scores from router
 
         Args : 
-            B -> Batch size
-            P -> Patches number
-            C -> Channel of feature map
-            pH -> Patch height
-            pW -> Patch width
-            X_patches -> Feature map, tensor (B, P, C, nH, nW)
-            layer_idx -> index of current layer
+            B (int)-> Batch size
+            P // -> Patches number
+            C // -> Channel of feature map
+            pH //  -> Patch height
+            pW // -> Patch width
+            X_patches (torch.tensor) -> Feature map, tensor shape (B, P, C, nH, nW)
+            layer_idx (int) -> index of current layer
 
         Returns:
             exp_scores -> tensor (B, P, num_experts)
@@ -127,7 +129,7 @@ class PCENetwork(nn.Module):
         Forward method of PCE Network
 
         Args :
-            X -> input of network, tensor (B,C,H,W)
+            X (torch.tensor) -> input of network, tensor.shape = (B,C,H,W)
 
         Pipeline of PCE Network:
             1. Divide input img/feature map in patches

@@ -1,17 +1,25 @@
-import torch
 import wandb as wb
-from tqdm import tqdm
-
 import os
+import io
 import tarfile
 import urllib.request
 import pandas as pd
 import numpy as np 
 import matplotlib.pyplot as plt
 
+from tqdm import tqdm
+from PIL import Image
+
+import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
+
+from torchvision.transforms import ToPILImage
+
+import torchmetrics
+from torchmetrics import Accuracy
+
 
 from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
 from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
@@ -130,23 +138,25 @@ def setup_wandb(
 
     return wb.config
 
-def log_gradient_stats(model):
-    """Log statistiche sui gradienti"""
-    grad_stats = {}
-    total_grad_norm = 0
+def calculate_gradient_norm(model):
+    """
+    Calculate norm of gradient
     
-    for name, param in model.named_parameters():
+    Args:
+        model: pytorch model
+        
+    Returns:
+        float: Global norm of gradient
+    """
+    total_grad_norm = 0.0
+    
+    for param in model.parameters():
         if param.grad is not None:
-            grad_norm = torch.norm(param.grad.data).item()
-            grad_max = torch.max(torch.abs(param.grad.data)).item()
-            
-            grad_stats[f"grad_norm/{name}"] = grad_norm
-            grad_stats[f"grad_max/{name}"] = grad_max
-            total_grad_norm += grad_norm ** 2
+            param_norm = torch.norm(param.grad.data).item()
+            total_grad_norm += param_norm ** 2
     
-    grad_stats["global/grad_norm"] = (total_grad_norm ** 0.5)
-    
-    wb.log(grad_stats)
+    global_grad_norm = total_grad_norm ** 0.5
+    return global_grad_norm
 
 def router_variance_loss(expert_weights, variance_weight = 0.01):
     """
@@ -182,6 +192,11 @@ def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py/data
     cifar10_train_dataloader = DataLoader(cifar10_train_set, batch_size=batch_size, shuffle=True)
     cifar10_val_dataloader = DataLoader(cifar10_val_set, batch_size=batch_size, shuffle=False)
 
+    # Get numer of classes in labels
+    all_labeles = cifar10.labels_train + cifar10.labels_validation
+    unique_labels = list(set(all_labeles))
+    num_classes = len(unique_labels)
+
     cifar10_dict = {
         'datasets': {
             'train': cifar10_train_set,
@@ -191,7 +206,9 @@ def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py/data
             'train': cifar10_train_dataloader,
             'val': cifar10_val_dataloader
         },
-        'name' : 'CIFAR10'
+        'name' : 'CIFAR10',
+        'num_classes' : num_classes,
+        'unique_lables' : unique_labels
     }
 
     return cifar10_dict
@@ -211,6 +228,11 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
     tiny_image_net_train_dataloader = DataLoader(dataset=tiny_image_net_train_set, batch_size=batch_size, shuffle=True)
     tiny_image_net_val_dataloader = DataLoader(dataset=tiny_image_net_val_set, batch_size=batch_size, shuffle=False)
 
+    # Get numer of classes in labels
+    all_labeles = tiny_image_net.labels_train + tiny_image_net.labels_validation
+    unique_labels = list(set(all_labeles))
+    num_classes = len(unique_labels)
+
     tiny_image_net_dic = {
         'datasets' : {
             'train' : tiny_image_net_train_set,
@@ -219,7 +241,10 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
         'dataloader' : {
             'train' : tiny_image_net_train_dataloader,
             'val' : tiny_image_net_val_dataloader
-        }
+        },
+        'name' : 'TinyImage-Net',
+        'num_classes' : num_classes,
+        'unique_lables' : unique_labels
     }
 
     return tiny_image_net_dic
@@ -280,6 +305,128 @@ def save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
         'scheduler': lr_scheduler.state_dict()
     }, f'{train_checkpoints_path}/train_checkpoints.pth')
 
+def setup_torchmetrics_accuracy(num_classes, device):
+    """
+    Setup Top-1 and Top-5 with torchmetrics
+
+    Args:
+        num_classes(int) : Number of classes in to dataset
+        device : Device (cuda / cpu)
+    """
+
+    metrics = {
+        'top1_train' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=1).to(device),
+        'top1_val' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=1).to(device),
+
+        'top5_train' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=5).to(device),
+        'top5_val' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=5).to(device),
+    }
+
+    return metrics
+
+def log_prediction_to_wandb(data_batch, true_labels, batch_loss,
+                            pred_labels, class_names = None, 
+                            num_images_to_log = 10, epoch = None, phase = 'train'):
+    """
+    Log model predictions to wandb with images, true labels and prediction labels
+
+    Args:
+        data_batch (torch.Tensor): Batch of images with shape (B, C, H, W)
+        true_labels  // : True labels with shape (B,)
+        pred_labels // : Predicted labels with shape (B,) or (B, num_classes)
+        class_names ( list) : List of class name for CIFAR-10/other datasets
+        num_images (int) : Number of images to log
+        epoch // : Current epoch number
+        step // : Current step number
+        phase (str) : Training phase ('Training' or 'Validation')
+        batch_loss (float) : loss of the current batch
+    """
+
+    # Convert tensors to numpy if needed
+    if isinstance(data_batch, torch.tensor):
+        data_batch = data_batch.detach().cpu()
+    if isinstance(true_labels, torch.tensor):
+        true_labels = true_labels.detach().cpu()
+    if isinstance(pred_labels, torch.tensor):
+        pred_labels = pred_labels.detach().cpu()
+
+    if len(pred_labels.shape) > 1:
+        pred_labels = torch.argmax(pred_labels, dim = 1)
+    
+    # Limit number of images to log
+    num_images_to_log = min(num_images_to_log, data_batch.shape[0])
+    wandb_images = []
+
+    for i in range(num_images_to_log):
+        # Get singles image and labels
+        img = data_batch[i]
+        true_label = true_labels[i]
+        pred_label = pred_labels[i]
+
+        # Conver images tensor to PIL Image, handle different image formats (CHW vs HWC)
+        if img.shape[0] == 3: 
+            img_pil = ToPILImage()(img)
+        else: #HWC format, transpose to CHW
+            img = img.permute(2, 0, 1)
+            img_pil = ToPILImage()(img)
+
+        # Create caption with true and predicted labels
+        true_class = class_names[true_label] if true_label < len(class_names) else f'True classes : {true_label}'
+        pred_class = class_names[pred_label] if pred_label < len(class_names) else f'Predicted classes : {pred_label}'
+
+        is_correct = "✓" if true_label == pred_label else "✗"
+        caption = f'{is_correct} True : {true_class} | Pred : {pred_class} \n batch loss : {batch_loss}'
+
+        # Create wandb image object
+        wandb_img = wb.Image(
+            img_pil,
+            caption=caption
+        )
+
+        wandb_images.append(wandb_img)
+    
+    # Log to wandb
+    log_dict = {f'{phase}_predictions' : wandb_images}
+    wb.log(log_dict, step = epoch)
+
+def log_train_metrics_to_wandb(train_loss, train_accuracy, val_loss, val_accuracy, lr, epoch, gradient_norm, best_val_loss):
+    """
+    Log train metrics to wandb
+
+    Args:
+        train_loss (float) : training loss
+        train_accuracy (float) : Accuracy of model prediction in training loop
+        val_loss (float) : validation loss
+        val_accuracy (float) : Accuracy of model prediction in validation loop
+        lr (float) : current_learning rate
+        epoch (int) : current training epoch
+        best_val_loss (float) : Best validation loss
+        gradient_norm (int) : Norm of gradient 
+    """
+
+    log_dict = {}
+    log_dict['epoch'] = epoch
+
+    # Add losses to logger
+    log_dict['train_loss'] = train_loss
+    log_dict['train_accuracy'] = train_accuracy
+
+    log_dict['val_loss'] = val_loss
+    log_dict['val_accuracy'] = val_accuracy
+
+    log_dict['best_val_loss'] = best_val_loss
+
+    # Add learning rate to logger
+    log_dict['learning_rate'] = lr
+
+    # Add gradient norm to logger
+    log_dict['gradient_norm'] = gradient_norm
+    
+    # Add learning rate to logger
+    log_dict['lr'] = lr
+
+    wb.log(log_dict, step=epoch)
+
 def training(
         model, 
         train_loader, 
@@ -289,7 +436,7 @@ def training(
         optimizer, 
         lr_scheduler,
         augmentation,
-        logger,
+        metrics,
         train_checkpoints_path = './checkpoints'):
     
     # Setting train and val loader
@@ -310,7 +457,13 @@ def training(
     model = model_checkpoints(train_checkpoints_path, model)
     model.to(device)
 
-    save_every_n_batches = 5
+    save_checkpoint_every = 5
+    log_prediction_every = 100
+    log_metrics_every = 50
+
+    best_val_loss = float('inf')
+    patience_count = 0
+    patience = 10
  
     # Start training
     for epoch in tqdm(range(start_epoch, epochs)):
@@ -319,6 +472,9 @@ def training(
         train_loss = val_loss = 0
         epoch_train_loss = 0
         batch_count = 0
+
+        train_correct = 0
+        train_total = 0
 
         # Resume training from last batch save in to checkpoint
         train_batches = list(enumerate(train_loader))
@@ -337,39 +493,78 @@ def training(
 
             # Forward pass
             logits = model(data)
-
-            # Compute loss and backward pass
             loss = criterion(logits, labels)
-            train_loss += loss.item()
+            batch_loss = loss.item()
 
+            # Backward pass
             optimizer.zero_grad()
             loss.backward()
+
+            # Gradient clipping
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+
             optimizer.step()
             lr_scheduler.step()
 
             # # Track losses
-            batch_loss = loss.item()
             epoch_train_loss += batch_loss
             train_loss_history.append(batch_loss)
             batch_count += 1
+
+            # Prepare data to calculate accuracy
+            if 'train_correct' in locals():
+                _, predicted = torch.max(logits.data, 1)
+                train_total += labels.size(0)
+                train_correct += (predicted == labels).sum().item()
             
             # Update actual batch idx
-            actual_batch_idx = batch_idx if epoch == start_epoch else batch_idx + start_train_batch
-            
-            if actual_batch_idx % save_every_n_batches == 0:
-                save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
-                              epoch, actual_batch_idx, train_loss_history, val_loss_history)
-        # Calculate avg train loss
+            if epoch == start_epoch:
+                actual_batch_idx = current_batch_start + batch_idx
+            else:
+                actual_batch_idx = batch_idx
+
+            # Save checkpoint
+            if actual_batch_idx % save_checkpoint_every == 0:
+                save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, epoch, actual_batch_idx,
+                                train_loss_history, val_loss_history)
+
+            # Log intermediate metrics
+            if actual_batch_idx % log_metrics_every == 0:
+                current_lr = optimizer.param_group[0]['lr']
+                wb.log({
+                    'batch_loss' : batch_loss,
+                    'learning_rate' : current_lr,
+                    'epoch' : epoch,
+                    'current_batch' : actual_batch_idx
+                })
+
+            if actual_batch_idx % log_prediction_every == 0:
+                with torch.no_grad():
+                    pred_probs = torch.softmax(logits[:15], dim=-1)
+                    log_prediction_to_wandb(
+                        data_batch=data[:15],
+                        true_labels=labels[:15],
+                        batch_loss=batch_loss,
+                        pred_labels=pred_probs[:15],
+                        class_name = None,
+                        num_images_to_log=10,
+                        epoch= epoch,
+                        phase = 'train'
+                    )
+
+        # Calculate epoch metrics
         avg_train_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
+        train_accuracy = (train_correct / train_total * 100) if 'train_correct' in locals() else 0
         
         # Validation phase
         model.eval()
         val_loss = 0
         val_batches = 0
+        val_correct = 0
+        val_total = 0
         
         with torch.no_grad():
-            for data, labels in tqdm(val_loader, desc='Validation batches'):
+            for batch_idx, (data, labels) in tqdm(val_loader, desc='Validation batches'):
                 data, labels = data.to(device), labels.to(device)
                 
                 logits = model(data)
@@ -377,29 +572,59 @@ def training(
                 
                 val_loss += loss.item()
                 val_batches += 1
+
+                # Prepare data to calculate accuracy
+                _, predicted = torch.max(logits.data, 1)
+                val_total += labels.size(0)
+                val_correct += (predicted == labels).sum().item()
+
+                if batch_idx % log_prediction_every == 0:
+                    with torch.no_grad():
+                        pred_probs = torch.softmax(logits[:15], dim=-1)
+                        log_prediction_to_wandb(
+                            data_batch=data[:15],
+                            true_labels=labels[:15],
+                            batch_loss=val_loss,
+                            pred_labels=pred_probs[:15],
+                            class_name = None,
+                            num_images_to_log=10,
+                            epoch= epoch,
+                            phase = 'validation'
+                        )
         
         avg_val_loss = val_loss / val_batches if val_batches > 0 else 0
+        val_accuracy = (val_correct / val_total * 100) if val_total > 0 else 0
         val_loss_history.append(avg_val_loss)
                 
+        # Early stopping check
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            patience_count = 0
+
+            # Save best model
+            torch.save(model.state_dict(), f'{train_checkpoints_path}/best_model.pth')
+        else:
+            patience_count += 1
+
+        lr = optimizer.param_groups[0]['lr']
+        gradient_norm = calculate_gradient_norm(model)
+
+        log_train_metrics_to_wandb(
+            train_loss=avg_train_loss,
+            train_accuracy=train_accuracy,
+            val_loss=avg_val_loss,
+            val_accuracy=val_accuracy,
+            epoch=epoch,
+            best_val_loss=best_val_loss,
+            gradient_norm=gradient_norm,
+        )
+        
         # Save checkpoint at end of epoch
         save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
                        epoch + 1, 0, train_loss_history, val_loss_history)
         
         # Reset batch counter for next epoch
         start_train_batch = 0
-
-        current_lr = optimizer.param.groups[0]['lr']
-        
-        if batch_idx % 50 == 0:
-            wb.log({
-                'current epoch' : epoch,
-                'current batch' : batch_idx,
-                'batch_loss' : batch_loss,
-                'avg train loss' : avg_train_loss,
-                'avg val loss' : avg_val_loss,
-                'gradient norm ' : log_gradient_stats(model),
-
-            })
     
     print('Training completed!')
     return model, train_loss_history, val_loss_history
@@ -462,6 +687,7 @@ if __name__ == "__main__":
     
     train_loader = train_datasets[dataset_idx]['dataloader']['train']
     validation_loader = train_datasets[dataset_idx]['dataloader']['val']
+    num_classes = train_dataset[dataset_idx]['num_classes']
 
     # Setup wandb for logging
     logger = setup_wandb(
@@ -482,17 +708,17 @@ if __name__ == "__main__":
         current_dataset = train_datasets[dataset_idx]['name']
     )
 
-    # Divides current dataset for initialize keys and setting input channel for model
-    dataset_patch, _, _ = patch_esxtractor(train_dataset.data)  # Extract patches from the first 10 images for router initialization
+    # Divides current dataset in patch for initialize keys and setting input channel for model
+    dataset_patch, _, _ = patch_esxtractor(train_dataset.data)  # Extract patches 
     _, _, C, _, _ = dataset_patch.shape
     
     router = Router(num_experts=num_exp, out_channel_key=out_channel_exp)
-    router.initialize_keys(dataset_patch)
+    router.initialize_keys(dataset_patch) #Initialize router keys with SSP 
 
     # Initialize model, optimizer (Adam) and scheduler
     # Loss initialize in training funcion (CrossEntropy)
     model = PCENetwork(
-        inpt_channel=C,
+        inpt_channel= C,
         num_experts = num_exp,
         kernel_sz_exps = kernel_size,
         output_cha_exps = out_channel_exp,
@@ -500,6 +726,7 @@ if __name__ == "__main__":
         patch_size = patch_size,
         router=router,
         dropout=0.1,
+        num_classes=num_classes,
         threshold=threshold,
         enable_ema=True
     )
@@ -515,6 +742,8 @@ if __name__ == "__main__":
     
     augmentation = DataAgumentation()
 
+    metrics = setup_torchmetrics_accuracy(num_classes=num_classes, device= 'cuda' if torch.cuda.is_available() else 'cpu')
+
     training(
         model=model,
         train_loader=train_loader,
@@ -525,4 +754,5 @@ if __name__ == "__main__":
         augmentation = augmentation,
         logger=logger,
         lr_scheduler=lr_scheduler,
+        metrics = metrics
     )

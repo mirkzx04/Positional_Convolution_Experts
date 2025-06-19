@@ -12,6 +12,7 @@ dependencies = [
     "procrustes>=0.2.1",
     "scikit-learn>=1.6.1",
     "torch>=2.7.0",
+    "torchmetrics>=1.7.3",
     "torchvision>=0.22.0",
     "tqdm>=4.67.1",
     "wandb>=0.20.1",
