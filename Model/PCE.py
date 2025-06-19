@@ -18,7 +18,8 @@ class PCENetwork(nn.Module):
                     dropout,
                     num_classes,
                     threshold=0.2,
-                    enable_ema=True
+                    enable_ema=True,
+                    enable_metrics_log = True,
                  ):
         super().__init__()
 
@@ -40,6 +41,7 @@ class PCENetwork(nn.Module):
 
         self.router = router
         self.num_classes = num_classes
+        self.enable_metrics_log = enable_metrics_log
 
         self.patch_extractor = PatchExtractor(patch_size)
 
@@ -118,6 +120,9 @@ class PCENetwork(nn.Module):
         X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
         X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
 
+        # Enable cache metric if rqeusted
+        if self.enable_metrics_log:
+            self.router.enable_metrics_cache()
         # get experts scores
         exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx])
         exp_scores = exp_scores.reshape(B, P, -1)

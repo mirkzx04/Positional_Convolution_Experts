@@ -158,7 +158,7 @@ def calculate_gradient_norm(model):
     global_grad_norm = total_grad_norm ** 0.5
     return global_grad_norm
 
-def router_variance_loss(expert_weights, variance_weight = 0.01):
+def router_variance_loss(model, variance_weight = 0.01, return_stats = True):
     """
     Calculate the variance loss for the router weights.
     
@@ -169,11 +169,30 @@ def router_variance_loss(expert_weights, variance_weight = 0.01):
     Returns:
         torch.Tensor: The variance loss.
     """
-    # Calculate the variance of the expert weights
-    variance = torch.var(expert_weights, dim=0)
+    # Get experts weights
+    metrics = model.router.get_cached_metrics()
+    expert_weights = metrics['weights_filtred']
+
+    # Calculate variance of weights experts
+    variance_per_expert = torch.var(expert_weights, dim = 0)
+    total_variance = torch.sum(variance_per_expert)
+
+    if return_stats:
+        wb.log({
+                'router_loss/variance_per_expert_mean': variance_per_expert.mean().item(),
+                'router_loss/total_variance': total_variance.item(),
+                'router_loss/variance_std': variance_per_expert.std().item(),
+                'router_loss/max_variance': variance_per_expert.max().item(),
+                'router_loss/min_variance': variance_per_expert.min().item(),
+                
+                # Aggiungi metriche aggiuntive dalla cache
+                'router_loss/expert_utilization_max': metrics['max_expert_utilization'],
+                'router_loss/expert_utilization_min': metrics['min_expert_utilization'],
+                'router_loss/routing_entropy': metrics['mean_routing_entropy'],
+                'router_loss/assignment_confidence': metrics['assignment_confidence'].mean().item(),
+            })
     
-    # Return the weighted variance loss
-    return variance_weight * torch.sum(variance)
+    return -total_variance * variance_weight
 
 def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py/data_batch_'):
     """
@@ -427,6 +446,219 @@ def log_train_metrics_to_wandb(train_loss, train_accuracy, val_loss, val_accurac
 
     wb.log(log_dict, step=epoch)
 
+def get_router_metrics(model, data_batch, layer_idx):
+    """
+    Get metrics of the router for specific layer
+    Args:
+        model: PCE Model
+        data_batch: Batch of img (B, C, H, W)
+        layer_idx: index layer to analyze
+        
+    Returns:
+        dict: Router metrics
+    """
+    model.eval()
+    
+    # Get metris if cache is avaible
+    metrics = model.router.get_cached_metrics()
+
+    if metrics is not None:
+        return metrics
+    
+    # Else execute forward pass
+    if data_batch is not None:
+        with torch.no_grad():
+            model.router.enable_metrics_cache()
+            _ = model(data_batch)
+            return model.router.get_cached_metrics()
+    
+    return None
+        
+def log_router_to_wandb(metrics, layer_idx, epoch, log_individual_experts=True):
+    """
+    Log metriche del router su wandb
+    
+    Args:
+        metrics: Dizionario di metriche dal router
+        layer_idx: Indice del layer
+        epoch: Epoca corrente
+        log_individual_experts: Se loggare utilizzo individuale degli esperti
+    """
+    if metrics is None:
+        return
+    
+    # Principale Metrics
+    log_dict = {
+        # Experts
+        f'router/L{layer_idx}/expert_utilization_max': metrics['max_expert_utilization'] * 100,
+        f'router/L{layer_idx}/expert_utilization_min': metrics['min_expert_utilization'] * 100,
+        f'router/L{layer_idx}/expert_utilization_std': metrics['utilization_std'] * 100,
+        f'router/L{layer_idx}/expert_utilization_entropy': metrics['utilization_entropy'],
+        
+        # Quality routing
+        f'router/L{layer_idx}/routing_entropy': metrics['mean_routing_entropy'],
+        f'router/L{layer_idx}/assignment_confidence': metrics['assignment_confidence'].mean().item(),
+        f'router/L{layer_idx}/low_confidence_patches_pct': metrics['low_confidence_patches_pct'],
+        
+        # Sparsity and activation
+        f'router/L{layer_idx}/sparsity_pct': metrics['sparsity_level'] * 100,
+        f'router/L{layer_idx}/active_experts_per_patch': metrics['active_experts_per_patch_mean'],
+        
+        # Similarities of keys
+        f'router/L{layer_idx}/keys_max_similarity': metrics['keys_max_similarity'],
+        f'router/L{layer_idx}/keys_mean_similarity': metrics['keys_mean_similarity'],
+        
+        # Router params
+        f'router/L{layer_idx}/threshold': metrics['threshold'],
+        f'router/L{layer_idx}/max_weight_filtered': metrics['mean_max_weight_filtered']
+    }
+    
+    if log_individual_experts:
+        for expert_idx in range(len(metrics['expert_utilization'])):
+            log_dict[f'router/L{layer_idx}/expert_{expert_idx}_utilization'] = \
+                metrics['expert_utilization'][expert_idx].item() * 100
+    
+    wb.log(log_dict, step=epoch)
+
+def check_router_health(metrics, layer_idx):
+    """
+    Verify health of router
+
+    Args:
+        metrics: Metriche del router
+        layer_idx: Indice del layer
+        
+    Returns:
+        tuple: (health_score, issues_list, warnings_list)
+    """
+
+    if metrics is None:
+        return 0.0, ['METRICS_ERROR'], []
+    
+    issues = []
+    warnings = []
+    health_score = 1.0
+    
+    # 1. Expert Dominance (un esperto domina troppo)
+    max_util = metrics['max_expert_utilization']
+    min_util = metrics['min_expert_utilization']
+    
+    if max_util > 0.8:
+        issues.append('EXPERT_DOMINANCE')
+        health_score -= 0.3
+    elif max_util > 0.6:
+        warnings.append('HIGH_EXPERT_UTILIZATION')
+        health_score -= 0.1
+    
+    # 2. Expert Underutilization (alcuni esperti inutilizzati)
+    if min_util < 0.02:
+        issues.append('EXPERT_UNDERUTILIZATION')
+        health_score -= 0.2
+    elif min_util < 0.05:
+        warnings.append('LOW_EXPERT_UTILIZATION')
+        health_score -= 0.1
+    
+    # 3. Low Routing Entropy (routing troppo deterministico)
+    entropy = metrics['mean_routing_entropy']
+    if entropy < 0.5:
+        issues.append('LOW_ROUTING_ENTROPY')
+        health_score -= 0.3
+    elif entropy < 1.0:
+        warnings.append('MODERATE_ROUTING_ENTROPY')
+        health_score -= 0.1
+    
+    # 4. Key Similarity (esperti troppo simili)
+    max_sim = metrics['keys_max_similarity']
+    if max_sim > 0.95:
+        issues.append('HIGH_KEY_SIMILARITY')
+        health_score -= 0.3
+    elif max_sim > 0.85:
+        warnings.append('MODERATE_KEY_SIMILARITY')
+        health_score -= 0.1
+    
+    # 5. Low Assignment Confidence
+    confidence = metrics['assignment_confidence'].mean().item()
+    if confidence < 0.3:
+        issues.append('LOW_ASSIGNMENT_CONFIDENCE')
+        health_score -= 0.2
+    elif confidence < 0.5:
+        warnings.append('MODERATE_ASSIGNMENT_CONFIDENCE')
+        health_score -= 0.1
+    
+    # 6. High Sparsity (threshold troppo alto)
+    sparsity = metrics['sparsity_level']
+    if sparsity > 0.9:
+        issues.append('EXCESSIVE_SPARSITY')
+        health_score -= 0.3
+    elif sparsity > 0.7:
+        warnings.append('HIGH_SPARSITY')
+        health_score -= 0.1
+    
+    # Assicura che health_score sia tra 0 e 1
+    health_score = max(0.0, min(1.0, health_score))
+    
+    return health_score, issues, warnings
+
+def quick_router_check(model, data_batch, layer_idx, epoch):
+    """
+    Quick check of router with complete logging
+
+    Args:
+        model : PCE Model
+        data_batch : Batch of image
+        layer_idx : layer to analyze
+        epoch : current epoch
+    """
+
+    metrics = get_router_metrics(model, data_batch, layer_idx)
+
+    if metrics is None:
+        return 
+    
+    # Check router health
+    health_score, issues, warnings = check_router_health(metrics, layer_idx)
+
+    # Log on wandb (only principale metrics)
+    wb.log({
+        f'router/L{layer_idx}/quick_health_score': health_score,
+        f'router/L{layer_idx}/quick_entropy': metrics['mean_routing_entropy'],
+        f'router/L{layer_idx}/quick_confidence': metrics['assignment_confidence'].mean().item(),
+        f'router/L{layer_idx}/quick_sparsity': metrics['sparsity_level'],
+        f'router/L{layer_idx}/issues_count': len(issues),
+        f'router/L{layer_idx}/warnings_count': len(warnings),
+        f'router/L{layer_idx}/overall_status': 1 if len(issues) == 0 else 0
+    }, step=epoch)
+
+def detailed_router_analysis(model, data_batch, layer_idx, epoch):
+    """
+    Detailed analysis of router with complete logging
+
+    Args:
+        model : PCE model
+        data_batch : batch of image
+        layer_idx : Layaer to analyze
+        epoch : Current epoch
+    """
+
+    metrics = get_router_metrics(model, data_batch, layer_idx)
+
+    if metrics is None:
+        return
+    
+    log_router_to_wandb(metrics, layer_idx, epoch)
+
+    health_score, issues, warnings = check_router_health(metrics, layer_idx)
+
+    wb.log({
+        f'router/L{layer_idx}/quick_health_score': health_score,
+        f'router/L{layer_idx}/quick_entropy': metrics['mean_routing_entropy'],
+        f'router/L{layer_idx}/quick_confidence': metrics['assignment_confidence'].mean().item(),
+        f'router/L{layer_idx}/quick_sparsity': metrics['sparsity_level'],
+        f'router/L{layer_idx}/issues_count': len(issues),
+        f'router/L{layer_idx}/warnings_count': len(warnings),
+        f'router/L{layer_idx}/overall_status': 1 if len(issues) == 0 else 0
+    }, step=epoch)
+
 def training(
         model, 
         train_loader, 
@@ -437,12 +669,16 @@ def training(
         lr_scheduler,
         augmentation,
         metrics,
+        class_names,
         train_checkpoints_path = './checkpoints'):
     
     # Setting train and val loader
     train_loader = train_loader
-    val_loader = val_loader
-    
+    val_loader = val_loader 
+
+    # enables router cache
+    model.router.enable_metrics_cache()
+
     # Set loss
     criterion = nn.CrossEntropyLoss()
 
@@ -457,10 +693,16 @@ def training(
     model = model_checkpoints(train_checkpoints_path, model)
     model.to(device)
 
+    # Setting how often to do training, model and router logging
     save_checkpoint_every = 5
     log_prediction_every = 100
     log_metrics_every = 50
 
+    ROUTER_QUICK_CHECK_EVERY = 15      
+    ROUTER_DETAILED_ANALYSIS_EVERY = 30 
+    ROUTER_SAMPLE_SIZE = 6
+
+    # Setting early stop params
     best_val_loss = float('inf')
     patience_count = 0
     patience = 10
@@ -494,7 +736,10 @@ def training(
             # Forward pass
             logits = model(data)
             loss = criterion(logits, labels)
-            batch_loss = loss.item()
+            
+            # Calculate variance_loss and total loss
+            variance_loss = router_variance_loss(model)
+            batch_loss = variance_loss + loss.item()
 
             # Backward pass
             optimizer.zero_grad()
@@ -530,7 +775,7 @@ def training(
 
             # Log intermediate metrics
             if actual_batch_idx % log_metrics_every == 0:
-                current_lr = optimizer.param_group[0]['lr']
+                current_lr = optimizer.param_groups[0]['lr']
                 wb.log({
                     'batch_loss' : batch_loss,
                     'learning_rate' : current_lr,
@@ -546,7 +791,7 @@ def training(
                         true_labels=labels[:15],
                         batch_loss=batch_loss,
                         pred_labels=pred_probs[:15],
-                        class_name = None,
+                        class_names=class_names,
                         num_images_to_log=10,
                         epoch= epoch,
                         phase = 'train'
@@ -606,6 +851,32 @@ def training(
         else:
             patience_count += 1
 
+        # Router quick check every 15 epochs
+        if epoch % ROUTER_QUICK_CHECK_EVERY == 0 and epoch > 0:
+            sample_data, _ = next(iter(val_loader))
+            sample_data = sample_data[:ROUTER_SAMPLE_SIZE].to(device)
+
+            model.router.enable_metrics_cache()
+
+            with torch.no_grad():
+                # Quick check only first layer
+                quick_router_check(
+                    model, sample_data, layer_idx = 0, epoch = epoch
+                )
+
+        # Router detailed analysis every 30 epochs
+        if epoch % ROUTER_DETAILED_ANALYSIS_EVERY == 0 and epoch > 0:
+            sample_data, _ = next(iter(val_loader))
+            sample_data = sample_data[:ROUTER_SAMPLE_SIZE].to(device)
+
+            model.router.enable_metrics_cache()
+
+            with torch.no_grad():
+                # Detailed check only first layer
+                detailed_router_analysis(
+                    model, sample_data, layer_idx = 0, epoch = epoch
+                )
+
         lr = optimizer.param_groups[0]['lr']
         gradient_norm = calculate_gradient_norm(model)
 
@@ -614,6 +885,7 @@ def training(
             train_accuracy=train_accuracy,
             val_loss=avg_val_loss,
             val_accuracy=val_accuracy,
+            lr=lr,
             epoch=epoch,
             best_val_loss=best_val_loss,
             gradient_norm=gradient_norm,
@@ -664,11 +936,11 @@ if __name__ == "__main__":
 
     # # Create DataLoader for training and validation of all datasets
     # Load Cifar-10 Sets
-    cifar10_sets = get_cifar10_sets()
+    cifar10_sets = get_cifar10_sets(batch_size)
     train_datasets.append(cifar10_sets)
 
     # Load TinyImageNet sets
-    tinyimagenet_sets = get_tinyimagenet_sets()
+    tinyimagenet_sets = get_tinyimagenet_sets(batch_size)
     train_datasets.append(tinyimagenet_sets)
 
     patch_esxtractor = PatchExtractor(patch_size=patch_size)
@@ -687,7 +959,8 @@ if __name__ == "__main__":
     
     train_loader = train_datasets[dataset_idx]['dataloader']['train']
     validation_loader = train_datasets[dataset_idx]['dataloader']['val']
-    num_classes = train_dataset[dataset_idx]['num_classes']
+    num_classes = train_datasets[dataset_idx]['num_classes']
+    class_names = train_datasets[dataset_idx]['unique_lables']
 
     # Setup wandb for logging
     logger = setup_wandb(
@@ -754,5 +1027,6 @@ if __name__ == "__main__":
         augmentation = augmentation,
         logger=logger,
         lr_scheduler=lr_scheduler,
+        class_names = class_names,
         metrics = metrics
     )
