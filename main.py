@@ -9,17 +9,18 @@ import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from PIL import Image
+from contextlib import nullcontext
+from functools import partial
 
 import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
+from torch.amp import autocast, GradScaler
 
 from torchvision.transforms import ToPILImage
 
-import torchmetrics
 from torchmetrics import Accuracy
-
 
 from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
 from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
@@ -424,12 +425,29 @@ def log_prediction_to_wandb(data_batch,
     wb.log(log_dict, step = epoch)
 
 def log_train_metrics_to_wandb(
-    avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_accuracy,
-    avg_val_classification_loss, avg_val_router_loss, avg_val_total_loss, val_accuracy,
-    lr, epoch, gradient_norm, best_val_loss, router_metrics
+    avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
+    train_top5_acc, avg_val_classification_loss, avg_val_router_loss, 
+    avg_val_total_loss, val_top1_acc, val_top5_acc, lr, epoch, gradient_norm, 
+    best_val_loss, router_metrics
     ):
     """
     Log train metrics to wandb
+    
+    avg_train_class_loss=avg_train_class_loss,
+            avg_train_router_loss=avg_train_router_loss,
+            avg_train_total_loss=avg_train_total_loss,
+            train_top1_acc=train_top1_acc,
+            train_top5_acc = train_top5_acc,
+            avg_val_classification_loss=avg_val_classification_loss,
+            avg_val_router_loss=avg_val_router_loss,
+            avg_val_total_loss=avg_val_total_loss,
+            val_top1_acc=val_top1_acc,
+            val_top5_acc = val_top5_acc,
+            lr=lr,
+            epoch=epoch,
+            gradient_norm=gradient_norm,
+            best_val_loss=best_val_loss,
+            router_metrics = router_metrics
 
     Args:
     avg_train_class_loss (float): Average training classification loss
@@ -450,11 +468,13 @@ def log_train_metrics_to_wandb(
         'avg_train_class_loss': avg_train_class_loss,
         'avg_train_router_loss': avg_train_router_loss,
         'avg_train_total_loss': avg_train_total_loss,
-        'train_accuracy': train_accuracy,
+        'train_top1_acc': train_top1_acc,
+        'train_top5_acc' : train_top5_acc,
         'avg_val_classification_loss': avg_val_classification_loss,
         'avg_val_router_loss': avg_val_router_loss,
         'avg_val_total_loss': avg_val_total_loss,
-        'val_accuracy': val_accuracy,
+        'val_top1_acc': val_top1_acc,
+        'val_top5_acc' : val_top5_acc,
         'lr': lr,
         'epoch': epoch,
         'gradient_norm': gradient_norm,
@@ -463,16 +483,8 @@ def log_train_metrics_to_wandb(
 
     # Adding router metrics if avaible
     if router_metrics:
-        log_dict.update({
-            'router/confidence_loss': router_metrics['confidence_loss'],
-            'router/collapse_loss': router_metrics['collapse_loss'], 
-            'router/total_specialization_loss': router_metrics['total_specialization_loss'],
-            'router/avg_patch_entropy': router_metrics['avg_patch_entropy'],
-            'router/unused_experts_count': router_metrics['unused_experts_count'],
-            'router/min_expert_usage': router_metrics['min_expert_usage'],
-            'router/max_expert_usage': router_metrics['max_expert_usage'],
-        })
-
+        log_dict.update(router_metrics)
+    
     wb.log(log_dict, step=epoch)
 
 def training(
@@ -484,8 +496,9 @@ def training(
         optimizer, 
         lr_scheduler,
         augmentation,
-        metrics,
+        accuracy_metrics,
         class_names,
+        num_classes,
         train_checkpoints_path = './checkpoints'):
     
     # Setting train and val loader
@@ -514,7 +527,12 @@ def training(
     best_val_loss = float('inf')
     patience_count = 0
     patience = 10
- 
+
+    # Setting mixed precision
+    use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
+    scaler = GradScaler("cuda") if use_amp else None   # indica il device
+    autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
+
     # Start training
     for epoch in tqdm(range(start_epoch, epochs)):
         model.train()
@@ -522,17 +540,16 @@ def training(
         epoch_train_loss = epoch_router_loss = epoch_total_loss = 0
         batch_count = 0
 
-        train_correct = 0
-        train_total = 0
+        # Reset accuracy metrics
+        accuracy_metrics['top1_train'].reset()
+        accuracy_metrics['top5_train'].reset()
 
-        # Resume training from last batch save in to checkpoint
-        train_batches = list(enumerate(train_loader))
-        current_batch_start = start_train_batch if epoch == start_epoch else 0
-
-        if current_batch_start > 0:
-            train_batches = train_batches[current_batch_start:]
-
-        for batch_idx, (data, labels) in tqdm(train_batches, desc = 'Training batches'):
+        accuracy_metrics['top1_val'].reset()
+        accuracy_metrics['top5_val'].reset()
+        
+        for batch_idx, (data, labels) in enumerate(tqdm(train_loader, desc='Training batches')):
+            if epoch == start_epoch and batch_idx < start_train_batch:
+                continue
 
             # Extract data and labels from batch
             data, labels = data.to(device), labels.to(device)
@@ -551,13 +568,17 @@ def training(
 
             # Backward pass
             optimizer.zero_grad()
-            total_loss.backward()
-
-            # Gradient clipping
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-
-            optimizer.step()
-            lr_scheduler.step()
+            if use_amp:
+                scaler.scale(total_loss).backward()
+                # unscale before clipping
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                total_loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                optimizer.step()
 
             # # Track losses
             batch_class_loss = classification_loss.item()
@@ -576,17 +597,13 @@ def training(
             })
             batch_count += 1
 
-            # Prepare data to calculate accuracy
-            if 'train_correct' in locals():
-                _, predicted = torch.max(logits.data, 1)
-                train_total += labels.size(0)
-                train_correct += (predicted == labels).sum().item()
+            # Update torchmetrics for training (Top-1 and Top-5)
+            accuracy_metrics['top1_train'].update(logits, labels)
+            if num_classes >= 5:
+                accuracy_metrics['top5_train'].update(logits, labels)
             
             # Update actual batch idx
-            if epoch == start_epoch:
-                actual_batch_idx = current_batch_start + batch_idx
-            else:
-                actual_batch_idx = batch_idx
+            actual_batch_idx = batch_idx
 
             # Save checkpoint
             if actual_batch_idx % save_checkpoint_every == 0:
@@ -619,12 +636,12 @@ def training(
                         phase = 'train'
                     )
 
+            del data, classification_loss, router_loss, total_loss, logits
+
         # Calculate epoch metrics
         avg_train_class_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
         avg_train_router_loss = epoch_router_loss / batch_count if batch_count > 0 else 0
         avg_train_total_loss = epoch_total_loss / batch_count if batch_count > 0 else 0
-
-        train_accuracy = (train_correct / train_total * 100) if 'train_correct' in locals() else 0
         
         # Validation phase
         model.eval()
@@ -632,14 +649,14 @@ def training(
         val_router_loss = 0.0
         val_total_loss = 0.0
         val_batches = 0
-        val_correct = 0
-        val_total = 0
         
         with torch.no_grad():
             for batch_idx, (data, labels) in tqdm(val_loader, desc='Validation batches'):
                 data, labels = data.to(device), labels.to(device)
                 
-                logits = model(data)
+                with autocast_ctx():
+                    logits = model(data)
+                
                 model.router.disable_metrics_cache()
                 classification_loss = criterion(logits, labels)
 
@@ -652,10 +669,9 @@ def training(
                 
                 val_batches += 1
 
-                # Prepare data to calculate accuracy
-                _, predicted = torch.max(logits.data, 1)
-                val_total += labels.size(0)
-                val_correct += (predicted == labels).sum().item()
+                accuracy_metrics['top1_val'].update(logits, labels)
+                if num_classes >= 5:
+                    accuracy_metrics['top5_val'].update(logits, labels)
 
                 if batch_idx % log_prediction_every == 0:
                    with torch.no_grad():
@@ -682,13 +698,22 @@ def training(
                         epoch= epoch,
                         phase = 'validation'
                     )
-        
+
+                del data, labels, logits, classification_loss, router_loss, total_loss
+
+        # Calculate epoch metrics
         avg_val_classification_loss = val_class_loss / val_batches if val_batches > 0 else 0
         avg_val_router_loss = val_router_loss / val_batches if val_batches > 0 else 0
         avg_val_total_loss = val_total_loss / val_batches if val_batches > 0 else 0
-        val_accuracy = (val_correct / val_total * 100) if val_total > 0 else 0
 
         val_loss_history.append(avg_val_total_loss)
+
+        # Compute final accuracy metrics
+        train_top1_acc = accuracy_metrics['top1_train'].compute().item() * 100
+        train_top5_acc = accuracy_metrics['top5_train'].compute().item() * 100 if num_classes >= 5 else 0
+
+        val_top1_acc = accuracy_metrics['top1_val'].compute().item() * 100
+        val_top5_acc = accuracy_metrics['top5_val'].compute().item() * 100 if num_classes >= 5 else 0
         
         # Calc router metrics every 5 epochs
         router_metrics = None
@@ -710,6 +735,10 @@ def training(
         else:
             patience_count += 1
 
+        if patience_count > patience:
+            print(f'Ealry Stop')
+            break
+
         lr = optimizer.param_groups[0]['lr']
         gradient_norm = calculate_gradient_norm(model)
 
@@ -717,11 +746,13 @@ def training(
             avg_train_class_loss=avg_train_class_loss,
             avg_train_router_loss=avg_train_router_loss,
             avg_train_total_loss=avg_train_total_loss,
-            train_accuracy=train_accuracy,
+            train_top1_acc=train_top1_acc,
+            train_top5_acc = train_top5_acc,
             avg_val_classification_loss=avg_val_classification_loss,
             avg_val_router_loss=avg_val_router_loss,
             avg_val_total_loss=avg_val_total_loss,
-            val_accuracy=val_accuracy,
+            val_top1_acc=val_top1_acc,
+            val_top5_acc = val_top5_acc,
             lr=lr,
             epoch=epoch,
             gradient_norm=gradient_norm,
@@ -735,6 +766,8 @@ def training(
         
         # Reset batch counter for next epoch
         start_train_batch = 0
+        torch.cuda.empty_cache()
+
     
     print('Training completed!')
     return model, train_loss_history, val_loss_history
@@ -869,5 +902,6 @@ if __name__ == "__main__":
         logger=logger,
         lr_scheduler=lr_scheduler,
         class_names = class_names,
-        metrics = metrics
+        num_classes=num_classes,
+        accuracy_metrics=metrics,    
     )

@@ -94,9 +94,9 @@ class Router(nn.Module):
                 'cosine_similarities': logits.detach(),
                 'weights_raw': weights.detach(),
                 'weights_filtered': weights_filtered.detach(),
-                'base_threshold': threshold,  # Threshold originale
-                'adaptive_threshold': adaptive_threshold.detach(),  # Threshold adattato
-                'max_weights': max_weight.detach(),  # Per analysis
+                'base_threshold': threshold,  
+                'adaptive_threshold': adaptive_threshold.detach(),
+                'max_weights': max_weight.detach(), 
                 'hard_threshold_used': hard_threshold
             }
 

@@ -53,7 +53,7 @@ class DataAgumentation:
 
         return batch_augmented
     
-    def rotate_image(self, image):
+    def rotate_img(self, image):
         """
         Rotate image
         """
@@ -76,7 +76,7 @@ class DataAgumentation:
         grid = F.affine_grid(theta, image.unsqueeze(0).shape, align_corners=False)
         rotated = F.grid_sample(image.unsqueeze(0), grid, align_corners=False)
 
-        return rotated.unsqueeze(0)
+        return rotated.squeeze(0)
     
     def shuffle_pixels(self, image):
         """

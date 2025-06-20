@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from torch.nn import LazyLinear
+
 from einops import rearrange
 
 from Model.Components.ConvExpert import ConvExpert
@@ -88,7 +90,7 @@ class PCENetwork(nn.Module):
 
             self.thresholds.append(nn.Parameter(torch.tensor(threshold, dtype=torch.float32)))
 
-        self.linear_layer = None
+        self.linear_layer = LazyLinear(self.num_classes)
 
         self.enable_ema = enable_ema
     
@@ -125,7 +127,7 @@ class PCENetwork(nn.Module):
             self.router.enable_metrics_cache()
             
         # get experts scores
-        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx])
+        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx], enable_ema = self.enable_ema)
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores
@@ -151,10 +153,7 @@ class PCENetwork(nn.Module):
             4. Return logits and expert scores
 
         Returns:
-            dict -> {'logits': logits, 'expert_scores': exp_scores}
-        logits -> tensor (B, num_classes)
-        exp_scores -> tensor (B, P, num_experts)
-        where P is the number of patches and num_experts is the number of experts in the layer
+            logits (torch.tensor) : tensor beatches (B, num_classes)
         """
 
         for layer_idx, layer_experts in enumerate(self.layers):
@@ -180,14 +179,14 @@ class PCENetwork(nn.Module):
                 exp_score = exp_scores[:, :, exp_idx]
 
                 # Applies expert at patch, reshape dimension
-                if exp_score.max() > self.thresholds[layer_idx].any():
+                if exp_score.max() > self.thresholds[layer_idx].item():
                     out = expert(X_patches_flat)
                     _, C_out, H_out, W_out = out.shape
                     out = out.reshape(B,P, C_out, H_out, W_out)
 
                     # Concatenation of the experts feature map with weighted sum
                     if output is None:
-                        output = torch.zeros(B, P, C_out, H_out, W_out)
+                        output = torch.zeros(B, P, C_out, H_out, W_out, device=out.device, dtype=out.dtype)
                     output += out * exp_score.unsqueeze(2).unsqueeze(3).unsqueeze(4)
 
             # Reassamble patch in in a single image [B, nP, C, H ,W] -> [B, C, H, W]
@@ -202,11 +201,7 @@ class PCENetwork(nn.Module):
 
             X = output
 
-        # Create, if not exists, linear layer for classification
-        if self.linear_layer is None:
-            B, C, H_out, W_out = output.shape
-            self.linear_layer = nn.Linear(C * H_out * W_out, self.num_classes)
-
-        logits = self.linear_layer(output)
+        experts_output = X.flatten(1)
+        logits = self.linear_layer(experts_output)
 
         return logits

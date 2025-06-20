@@ -106,9 +106,6 @@ class CIFAR10Dataset(Dataset):
             self.data_train.extend(imgs_data)
             self.labels_train.extend(batch_data[b'labels'])
 
-        self.data_train = np.array(self.data)
-        self.labels_train = np.array(self.lables)
-
     def load_batch_val(self):
         """
         Load validation batch data
