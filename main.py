@@ -158,41 +158,47 @@ def calculate_gradient_norm(model):
     global_grad_norm = total_grad_norm ** 0.5
     return global_grad_norm
 
-def router_variance_loss(model, variance_weight = 0.01, return_stats = True):
+def calc_router_loss(model, confidence_weight = 0.01, anticollapse = 0.001, return_stats = False):
     """
-    Calculate the variance loss for the router weights.
-    
-    Args:
-        expert_weights (torch.Tensor): The weights of the experts.
-        variance_weight (float): Weight for the variance loss.
-        
-    Returns:
-        torch.Tensor: The variance loss.
-    """
-    # Get experts weights
-    metrics = model.router.get_cached_metrics()
-    expert_weights = metrics['weights_filtred']
+    Encourage confident expert selection while preventing expert collapse.
 
-    # Calculate variance of weights experts
-    variance_per_expert = torch.var(expert_weights, dim = 0)
-    total_variance = torch.sum(variance_per_expert)
+    - Confidence : When an expert is chosen, it should be chosen strongly
+    - Anti-Collapse : Ensure all experts get used across the dataset over time
+    """
+
+    metrics = model.router.get_cached_metrics()
+    if metrics is None:
+        return torch.tensor(0.0, requires_grad=True)
+    
+    # Get experts weights [B * P, num_experts]
+    expert_weights = metrics['weights_filtered']
+
+    # Confidence loss : Encourage sharp distributions per patch
+    # We use entropy : Highet entropy = Less confident, Low entropy = more confident
+    patch_entropies = - (expert_weights * torch.log(expert_weights + 1e-8)).sum(dim = 1)
+    confidence_loss = patch_entropies.mean()
+
+    # Anti collapse loss
+    experts_usage = (expert_weights > 0).float().mean(dim = 0)
+    experts_unused = (experts_usage < 0.01).float().sum()
+    collapse_loss = experts_unused 
+
+    total_loss = confidence_weight * confidence_loss + anticollapse * collapse_loss
 
     if return_stats:
-        wb.log({
-                'router_loss/variance_per_expert_mean': variance_per_expert.mean().item(),
-                'router_loss/total_variance': total_variance.item(),
-                'router_loss/variance_std': variance_per_expert.std().item(),
-                'router_loss/max_variance': variance_per_expert.max().item(),
-                'router_loss/min_variance': variance_per_expert.min().item(),
-                
-                # Aggiungi metriche aggiuntive dalla cache
-                'router_loss/expert_utilization_max': metrics['max_expert_utilization'],
-                'router_loss/expert_utilization_min': metrics['min_expert_utilization'],
-                'router_loss/routing_entropy': metrics['mean_routing_entropy'],
-                'router_loss/assignment_confidence': metrics['assignment_confidence'].mean().item(),
-            })
-    
-    return -total_variance * variance_weight
+        router_loss_metrics = {
+            'router_loss/confidence_loss': confidence_loss.item(),
+            'router_loss/collapse_loss': collapse_loss.item(),
+            'router_loss/total_specialization_loss': total_loss.item(),
+            'router_loss/avg_patch_entropy': patch_entropies.mean().item(),
+            'router_loss/unused_experts_count': experts_unused.item(),
+            'router_loss/min_expert_usage': experts_usage.min().item(),
+            'router_loss/max_expert_usage': experts_usage.max().item(),
+        }
+
+        return total_loss, router_loss_metrics
+
+    return total_loss
 
 def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py/data_batch_'):
     """
@@ -343,9 +349,16 @@ def setup_torchmetrics_accuracy(num_classes, device):
 
     return metrics
 
-def log_prediction_to_wandb(data_batch, true_labels, batch_loss,
-                            pred_labels, class_names = None, 
-                            num_images_to_log = 10, epoch = None, phase = 'train'):
+def log_prediction_to_wandb(data_batch, 
+                            true_labels,
+                            pred_labels, 
+                            batch_class_loss,
+                            batch_router_loss,
+                            batch_total_loss,
+                            class_names = None, 
+                            num_images_to_log = 10, 
+                            epoch = None, 
+                            phase = 'train'):
     """
     Log model predictions to wandb with images, true labels and prediction labels
 
@@ -394,7 +407,9 @@ def log_prediction_to_wandb(data_batch, true_labels, batch_loss,
         pred_class = class_names[pred_label] if pred_label < len(class_names) else f'Predicted classes : {pred_label}'
 
         is_correct = "✓" if true_label == pred_label else "✗"
-        caption = f'{is_correct} True : {true_class} | Pred : {pred_class} \n batch loss : {batch_loss}'
+        caption = f'{is_correct} True : {true_class} | Pred : {pred_class} \n \
+                    loss metrics : batch classification loss : {batch_class_loss} ||  \
+                    batch router loss : {batch_router_loss} || batch total loss : {batch_total_loss}'
 
         # Create wandb image object
         wandb_img = wb.Image(
@@ -408,256 +423,57 @@ def log_prediction_to_wandb(data_batch, true_labels, batch_loss,
     log_dict = {f'{phase}_predictions' : wandb_images}
     wb.log(log_dict, step = epoch)
 
-def log_train_metrics_to_wandb(train_loss, train_accuracy, val_loss, val_accuracy, lr, epoch, gradient_norm, best_val_loss):
+def log_train_metrics_to_wandb(
+    avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_accuracy,
+    avg_val_classification_loss, avg_val_router_loss, avg_val_total_loss, val_accuracy,
+    lr, epoch, gradient_norm, best_val_loss, router_metrics
+    ):
     """
     Log train metrics to wandb
 
     Args:
-        train_loss (float) : training loss
-        train_accuracy (float) : Accuracy of model prediction in training loop
-        val_loss (float) : validation loss
-        val_accuracy (float) : Accuracy of model prediction in validation loop
-        lr (float) : current_learning rate
-        epoch (int) : current training epoch
-        best_val_loss (float) : Best validation loss
-        gradient_norm (int) : Norm of gradient 
+    avg_train_class_loss (float): Average training classification loss
+    avg_train_router_loss (float): Average training router loss
+    avg_train_total_loss (float): Average training total loss
+    train_accuracy (float): Training accuracy
+    avg_val_classification_loss (float): Average validation classification loss
+    avg_val_router_loss (float): Average validation router loss
+    avg_val_total_loss (float): Average validation total loss
+    val_accuracy (float): Validation accuracy
+    lr (float): Current learning rate
+    epoch (int): Current training epoch
+    gradient_norm (float): Norm of gradient
+    best_val_loss (float): Best validation loss
     """
 
-    log_dict = {}
-    log_dict['epoch'] = epoch
-
-    # Add losses to logger
-    log_dict['train_loss'] = train_loss
-    log_dict['train_accuracy'] = train_accuracy
-
-    log_dict['val_loss'] = val_loss
-    log_dict['val_accuracy'] = val_accuracy
-
-    log_dict['best_val_loss'] = best_val_loss
-
-    # Add learning rate to logger
-    log_dict['learning_rate'] = lr
-
-    # Add gradient norm to logger
-    log_dict['gradient_norm'] = gradient_norm
-    
-    # Add learning rate to logger
-    log_dict['lr'] = lr
-
-    wb.log(log_dict, step=epoch)
-
-def get_router_metrics(model, data_batch, layer_idx):
-    """
-    Get metrics of the router for specific layer
-    Args:
-        model: PCE Model
-        data_batch: Batch of img (B, C, H, W)
-        layer_idx: index layer to analyze
-        
-    Returns:
-        dict: Router metrics
-    """
-    model.eval()
-    
-    # Get metris if cache is avaible
-    metrics = model.router.get_cached_metrics()
-
-    if metrics is not None:
-        return metrics
-    
-    # Else execute forward pass
-    if data_batch is not None:
-        with torch.no_grad():
-            model.router.enable_metrics_cache()
-            _ = model(data_batch)
-            return model.router.get_cached_metrics()
-    
-    return None
-        
-def log_router_to_wandb(metrics, layer_idx, epoch, log_individual_experts=True):
-    """
-    Log metriche del router su wandb
-    
-    Args:
-        metrics: Dizionario di metriche dal router
-        layer_idx: Indice del layer
-        epoch: Epoca corrente
-        log_individual_experts: Se loggare utilizzo individuale degli esperti
-    """
-    if metrics is None:
-        return
-    
-    # Principale Metrics
     log_dict = {
-        # Experts
-        f'router/L{layer_idx}/expert_utilization_max': metrics['max_expert_utilization'] * 100,
-        f'router/L{layer_idx}/expert_utilization_min': metrics['min_expert_utilization'] * 100,
-        f'router/L{layer_idx}/expert_utilization_std': metrics['utilization_std'] * 100,
-        f'router/L{layer_idx}/expert_utilization_entropy': metrics['utilization_entropy'],
-        
-        # Quality routing
-        f'router/L{layer_idx}/routing_entropy': metrics['mean_routing_entropy'],
-        f'router/L{layer_idx}/assignment_confidence': metrics['assignment_confidence'].mean().item(),
-        f'router/L{layer_idx}/low_confidence_patches_pct': metrics['low_confidence_patches_pct'],
-        
-        # Sparsity and activation
-        f'router/L{layer_idx}/sparsity_pct': metrics['sparsity_level'] * 100,
-        f'router/L{layer_idx}/active_experts_per_patch': metrics['active_experts_per_patch_mean'],
-        
-        # Similarities of keys
-        f'router/L{layer_idx}/keys_max_similarity': metrics['keys_max_similarity'],
-        f'router/L{layer_idx}/keys_mean_similarity': metrics['keys_mean_similarity'],
-        
-        # Router params
-        f'router/L{layer_idx}/threshold': metrics['threshold'],
-        f'router/L{layer_idx}/max_weight_filtered': metrics['mean_max_weight_filtered']
+        'avg_train_class_loss': avg_train_class_loss,
+        'avg_train_router_loss': avg_train_router_loss,
+        'avg_train_total_loss': avg_train_total_loss,
+        'train_accuracy': train_accuracy,
+        'avg_val_classification_loss': avg_val_classification_loss,
+        'avg_val_router_loss': avg_val_router_loss,
+        'avg_val_total_loss': avg_val_total_loss,
+        'val_accuracy': val_accuracy,
+        'lr': lr,
+        'epoch': epoch,
+        'gradient_norm': gradient_norm,
+        'best_val_loss': best_val_loss,
     }
-    
-    if log_individual_experts:
-        for expert_idx in range(len(metrics['expert_utilization'])):
-            log_dict[f'router/L{layer_idx}/expert_{expert_idx}_utilization'] = \
-                metrics['expert_utilization'][expert_idx].item() * 100
-    
+
+    # Adding router metrics if avaible
+    if router_metrics:
+        log_dict.update({
+            'router/confidence_loss': router_metrics['confidence_loss'],
+            'router/collapse_loss': router_metrics['collapse_loss'], 
+            'router/total_specialization_loss': router_metrics['total_specialization_loss'],
+            'router/avg_patch_entropy': router_metrics['avg_patch_entropy'],
+            'router/unused_experts_count': router_metrics['unused_experts_count'],
+            'router/min_expert_usage': router_metrics['min_expert_usage'],
+            'router/max_expert_usage': router_metrics['max_expert_usage'],
+        })
+
     wb.log(log_dict, step=epoch)
-
-def check_router_health(metrics, layer_idx):
-    """
-    Verify health of router
-
-    Args:
-        metrics: Metriche del router
-        layer_idx: Indice del layer
-        
-    Returns:
-        tuple: (health_score, issues_list, warnings_list)
-    """
-
-    if metrics is None:
-        return 0.0, ['METRICS_ERROR'], []
-    
-    issues = []
-    warnings = []
-    health_score = 1.0
-    
-    # 1. Expert Dominance (un esperto domina troppo)
-    max_util = metrics['max_expert_utilization']
-    min_util = metrics['min_expert_utilization']
-    
-    if max_util > 0.8:
-        issues.append('EXPERT_DOMINANCE')
-        health_score -= 0.3
-    elif max_util > 0.6:
-        warnings.append('HIGH_EXPERT_UTILIZATION')
-        health_score -= 0.1
-    
-    # 2. Expert Underutilization (alcuni esperti inutilizzati)
-    if min_util < 0.02:
-        issues.append('EXPERT_UNDERUTILIZATION')
-        health_score -= 0.2
-    elif min_util < 0.05:
-        warnings.append('LOW_EXPERT_UTILIZATION')
-        health_score -= 0.1
-    
-    # 3. Low Routing Entropy (routing troppo deterministico)
-    entropy = metrics['mean_routing_entropy']
-    if entropy < 0.5:
-        issues.append('LOW_ROUTING_ENTROPY')
-        health_score -= 0.3
-    elif entropy < 1.0:
-        warnings.append('MODERATE_ROUTING_ENTROPY')
-        health_score -= 0.1
-    
-    # 4. Key Similarity (esperti troppo simili)
-    max_sim = metrics['keys_max_similarity']
-    if max_sim > 0.95:
-        issues.append('HIGH_KEY_SIMILARITY')
-        health_score -= 0.3
-    elif max_sim > 0.85:
-        warnings.append('MODERATE_KEY_SIMILARITY')
-        health_score -= 0.1
-    
-    # 5. Low Assignment Confidence
-    confidence = metrics['assignment_confidence'].mean().item()
-    if confidence < 0.3:
-        issues.append('LOW_ASSIGNMENT_CONFIDENCE')
-        health_score -= 0.2
-    elif confidence < 0.5:
-        warnings.append('MODERATE_ASSIGNMENT_CONFIDENCE')
-        health_score -= 0.1
-    
-    # 6. High Sparsity (threshold troppo alto)
-    sparsity = metrics['sparsity_level']
-    if sparsity > 0.9:
-        issues.append('EXCESSIVE_SPARSITY')
-        health_score -= 0.3
-    elif sparsity > 0.7:
-        warnings.append('HIGH_SPARSITY')
-        health_score -= 0.1
-    
-    # Assicura che health_score sia tra 0 e 1
-    health_score = max(0.0, min(1.0, health_score))
-    
-    return health_score, issues, warnings
-
-def quick_router_check(model, data_batch, layer_idx, epoch):
-    """
-    Quick check of router with complete logging
-
-    Args:
-        model : PCE Model
-        data_batch : Batch of image
-        layer_idx : layer to analyze
-        epoch : current epoch
-    """
-
-    metrics = get_router_metrics(model, data_batch, layer_idx)
-
-    if metrics is None:
-        return 
-    
-    # Check router health
-    health_score, issues, warnings = check_router_health(metrics, layer_idx)
-
-    # Log on wandb (only principale metrics)
-    wb.log({
-        f'router/L{layer_idx}/quick_health_score': health_score,
-        f'router/L{layer_idx}/quick_entropy': metrics['mean_routing_entropy'],
-        f'router/L{layer_idx}/quick_confidence': metrics['assignment_confidence'].mean().item(),
-        f'router/L{layer_idx}/quick_sparsity': metrics['sparsity_level'],
-        f'router/L{layer_idx}/issues_count': len(issues),
-        f'router/L{layer_idx}/warnings_count': len(warnings),
-        f'router/L{layer_idx}/overall_status': 1 if len(issues) == 0 else 0
-    }, step=epoch)
-
-def detailed_router_analysis(model, data_batch, layer_idx, epoch):
-    """
-    Detailed analysis of router with complete logging
-
-    Args:
-        model : PCE model
-        data_batch : batch of image
-        layer_idx : Layaer to analyze
-        epoch : Current epoch
-    """
-
-    metrics = get_router_metrics(model, data_batch, layer_idx)
-
-    if metrics is None:
-        return
-    
-    log_router_to_wandb(metrics, layer_idx, epoch)
-
-    health_score, issues, warnings = check_router_health(metrics, layer_idx)
-
-    wb.log({
-        f'router/L{layer_idx}/quick_health_score': health_score,
-        f'router/L{layer_idx}/quick_entropy': metrics['mean_routing_entropy'],
-        f'router/L{layer_idx}/quick_confidence': metrics['assignment_confidence'].mean().item(),
-        f'router/L{layer_idx}/quick_sparsity': metrics['sparsity_level'],
-        f'router/L{layer_idx}/issues_count': len(issues),
-        f'router/L{layer_idx}/warnings_count': len(warnings),
-        f'router/L{layer_idx}/overall_status': 1 if len(issues) == 0 else 0
-    }, step=epoch)
 
 def training(
         model, 
@@ -676,9 +492,6 @@ def training(
     train_loader = train_loader
     val_loader = val_loader 
 
-    # enables router cache
-    model.router.enable_metrics_cache()
-
     # Set loss
     criterion = nn.CrossEntropyLoss()
 
@@ -696,11 +509,6 @@ def training(
     # Setting how often to do training, model and router logging
     save_checkpoint_every = 5
     log_prediction_every = 100
-    log_metrics_every = 50
-
-    ROUTER_QUICK_CHECK_EVERY = 15      
-    ROUTER_DETAILED_ANALYSIS_EVERY = 30 
-    ROUTER_SAMPLE_SIZE = 6
 
     # Setting early stop params
     best_val_loss = float('inf')
@@ -711,8 +519,7 @@ def training(
     for epoch in tqdm(range(start_epoch, epochs)):
         model.train()
 
-        train_loss = val_loss = 0
-        epoch_train_loss = 0
+        epoch_train_loss = epoch_router_loss = epoch_total_loss = 0
         batch_count = 0
 
         train_correct = 0
@@ -735,15 +542,16 @@ def training(
 
             # Forward pass
             logits = model(data)
-            loss = criterion(logits, labels)
+            classification_loss = criterion(logits, labels)
             
             # Calculate variance_loss and total loss
-            variance_loss = router_variance_loss(model)
-            batch_loss = variance_loss + loss.item()
+            router_loss = calc_router_loss(model)
+            model.router.disable_metrics_cache()
+            total_loss = classification_loss + router_loss
 
             # Backward pass
             optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
 
             # Gradient clipping
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
@@ -752,8 +560,20 @@ def training(
             lr_scheduler.step()
 
             # # Track losses
-            epoch_train_loss += batch_loss
-            train_loss_history.append(batch_loss)
+            batch_class_loss = classification_loss.item()
+            batch_router_loss = router_loss.item()
+            batch_total_loss = total_loss.item()
+
+            epoch_train_loss += batch_class_loss
+            epoch_router_loss += batch_router_loss
+            epoch_total_loss += batch_total_loss
+            train_loss_history.append({
+                'epoch' : epoch,
+                'batch' : batch_idx,
+                'classification_loss' : batch_class_loss,
+                'router_loss' : batch_router_loss,
+                'total_loss' : batch_total_loss
+            })
             batch_count += 1
 
             # Prepare data to calculate accuracy
@@ -773,37 +593,44 @@ def training(
                 save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, epoch, actual_batch_idx,
                                 train_loss_history, val_loss_history)
 
-            # Log intermediate metrics
-            if actual_batch_idx % log_metrics_every == 0:
-                current_lr = optimizer.param_groups[0]['lr']
-                wb.log({
-                    'batch_loss' : batch_loss,
-                    'learning_rate' : current_lr,
-                    'epoch' : epoch,
-                    'current_batch' : actual_batch_idx
-                })
-
             if actual_batch_idx % log_prediction_every == 0:
                 with torch.no_grad():
-                    pred_probs = torch.softmax(logits[:15], dim=-1)
+
+                    # Limit sample size
+                    log_size = min(10, data.shape[0])
+
+                    # transfer to CPU 
+                    sample_data = data[:log_size].detach().cpu()
+                    sample_labels = labels[:log_size].detach().cpu()
+                    sample_logits = logits[:log_size].detach().cpu()
+
+                    pred_probs = torch.softmax(sample_logits, dim=-1)
+
                     log_prediction_to_wandb(
-                        data_batch=data[:15],
-                        true_labels=labels[:15],
-                        batch_loss=batch_loss,
-                        pred_labels=pred_probs[:15],
+                        data_batch=sample_data,
+                        true_labels=sample_labels,
+                        pred_labels=pred_probs,
+                        batch_class_loss = batch_class_loss,
+                        batch_router_loss = batch_router_loss,
+                        batch_total_loss = batch_total_loss,
                         class_names=class_names,
-                        num_images_to_log=10,
+                        num_images_to_log=log_size,
                         epoch= epoch,
                         phase = 'train'
                     )
 
         # Calculate epoch metrics
-        avg_train_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
+        avg_train_class_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
+        avg_train_router_loss = epoch_router_loss / batch_count if batch_count > 0 else 0
+        avg_train_total_loss = epoch_total_loss / batch_count if batch_count > 0 else 0
+
         train_accuracy = (train_correct / train_total * 100) if 'train_correct' in locals() else 0
         
         # Validation phase
         model.eval()
-        val_loss = 0
+        val_class_loss = 0.0
+        val_router_loss = 0.0
+        val_total_loss = 0.0
         val_batches = 0
         val_correct = 0
         val_total = 0
@@ -813,9 +640,16 @@ def training(
                 data, labels = data.to(device), labels.to(device)
                 
                 logits = model(data)
-                loss = criterion(logits, labels)
+                model.router.disable_metrics_cache()
+                classification_loss = criterion(logits, labels)
+
+                router_loss = calc_router_loss(model)
+                total_loss = classification_loss + router_loss
+
+                val_class_loss += classification_loss.item()
+                val_router_loss += router_loss.item()
+                val_total_loss += total_loss.item()
                 
-                val_loss += loss.item()
                 val_batches += 1
 
                 # Prepare data to calculate accuracy
@@ -824,26 +658,51 @@ def training(
                 val_correct += (predicted == labels).sum().item()
 
                 if batch_idx % log_prediction_every == 0:
-                    with torch.no_grad():
-                        pred_probs = torch.softmax(logits[:15], dim=-1)
-                        log_prediction_to_wandb(
-                            data_batch=data[:15],
-                            true_labels=labels[:15],
-                            batch_loss=val_loss,
-                            pred_labels=pred_probs[:15],
-                            class_name = None,
-                            num_images_to_log=10,
-                            epoch= epoch,
-                            phase = 'validation'
-                        )
+                   with torch.no_grad():
+
+                    # Limit sample size
+                    log_size = min(10, data.shape[0])
+
+                    # transfer to CPU 
+                    sample_data = data[:log_size].detach().cpu()
+                    sample_labels = labels[:log_size].detach().cpu()
+                    sample_logits = logits[:log_size].detach().cpu()
+
+                    pred_probs = torch.softmax(sample_logits, dim=-1)
+
+                    log_prediction_to_wandb(
+                        data_batch=sample_data,
+                        true_labels=sample_labels,
+                        pred_labels=pred_probs,
+                        batch_class_loss = val_class_loss,
+                        batch_router_loss = val_router_loss,
+                        batch_total_loss = val_total_loss,
+                        class_names=class_names,
+                        num_images_to_log=log_size,
+                        epoch= epoch,
+                        phase = 'validation'
+                    )
         
-        avg_val_loss = val_loss / val_batches if val_batches > 0 else 0
+        avg_val_classification_loss = val_class_loss / val_batches if val_batches > 0 else 0
+        avg_val_router_loss = val_router_loss / val_batches if val_batches > 0 else 0
+        avg_val_total_loss = val_total_loss / val_batches if val_batches > 0 else 0
         val_accuracy = (val_correct / val_total * 100) if val_total > 0 else 0
-        val_loss_history.append(avg_val_loss)
-                
+
+        val_loss_history.append(avg_val_total_loss)
+        
+        # Calc router metrics every 5 epochs
+        router_metrics = None
+        with torch.no_grad():
+            # Get sample per router metrics
+            sample_data, _ = next(iter(val_loader))
+            sample_data = sample_data[:8].to(device)
+            _ = model(sample_data)
+
+            _, router_metrics = calc_router_loss(model, return_stats=True)
+
         # Early stopping check
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        if avg_val_total_loss < best_val_loss:
+            best_val_loss = avg_val_total_loss
             patience_count = 0
 
             # Save best model
@@ -851,44 +710,23 @@ def training(
         else:
             patience_count += 1
 
-        # Router quick check every 15 epochs
-        if epoch % ROUTER_QUICK_CHECK_EVERY == 0 and epoch > 0:
-            sample_data, _ = next(iter(val_loader))
-            sample_data = sample_data[:ROUTER_SAMPLE_SIZE].to(device)
-
-            model.router.enable_metrics_cache()
-
-            with torch.no_grad():
-                # Quick check only first layer
-                quick_router_check(
-                    model, sample_data, layer_idx = 0, epoch = epoch
-                )
-
-        # Router detailed analysis every 30 epochs
-        if epoch % ROUTER_DETAILED_ANALYSIS_EVERY == 0 and epoch > 0:
-            sample_data, _ = next(iter(val_loader))
-            sample_data = sample_data[:ROUTER_SAMPLE_SIZE].to(device)
-
-            model.router.enable_metrics_cache()
-
-            with torch.no_grad():
-                # Detailed check only first layer
-                detailed_router_analysis(
-                    model, sample_data, layer_idx = 0, epoch = epoch
-                )
-
         lr = optimizer.param_groups[0]['lr']
         gradient_norm = calculate_gradient_norm(model)
 
         log_train_metrics_to_wandb(
-            train_loss=avg_train_loss,
+            avg_train_class_loss=avg_train_class_loss,
+            avg_train_router_loss=avg_train_router_loss,
+            avg_train_total_loss=avg_train_total_loss,
             train_accuracy=train_accuracy,
-            val_loss=avg_val_loss,
+            avg_val_classification_loss=avg_val_classification_loss,
+            avg_val_router_loss=avg_val_router_loss,
+            avg_val_total_loss=avg_val_total_loss,
             val_accuracy=val_accuracy,
             lr=lr,
             epoch=epoch,
-            best_val_loss=best_val_loss,
             gradient_norm=gradient_norm,
+            best_val_loss=best_val_loss,
+            router_metrics = router_metrics
         )
         
         # Save checkpoint at end of epoch
@@ -915,7 +753,9 @@ if __name__ == "__main__":
     dropout = 0.1
     weight_decay = 1e-4
     ema_alpha = 0.99
+
     threshold = 0.2
+    hard_threshold_router = False
 
     epochs = 250
     pre_train_epochs = 150
@@ -1001,6 +841,7 @@ if __name__ == "__main__":
         dropout=0.1,
         num_classes=num_classes,
         threshold=threshold,
+        hard_threshold_router = hard_threshold_router,
         enable_ema=True
     )
     print('-- Router and model initialized -- ')

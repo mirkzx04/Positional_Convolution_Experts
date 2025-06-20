@@ -40,7 +40,7 @@ class Router(nn.Module):
         self.cache_enabled = False
         self.last_forward_cache = None
 
-    def forward(self, patch, threshold, enable_ema=True):
+    def forward(self, patch, threshold, hard_threshold = False, enable_ema=True):
         """
         Forward method of Router
 
@@ -65,101 +65,52 @@ class Router(nn.Module):
 
         # Calc softmax weights and applied threshold
         weights = F.softmax(logits, dim=-1)
-        mask = weights > threshold
-        weights_filtered = weights * mask.float()
-        weights_filtered = weights_filtered / (weights_filtered.sum(dim=-1, keepdim=True) + 1e-8)
+        
+        # Adaptive threshold
+        max_weight = weights.max(dim=-1, keepdim=True)[0]
+        adaptive_threshold = torch.clamp(
+            threshold * (2.0 - max_weight),
+            min = 0.01, max = 0.8
+        )
+
+        if hard_threshold == False:
+            # Soft threshdol
+            soft_mask = torch.sigmoid(
+                self.temperature * (weights - adaptive_threshold)
+            )
+
+            weights_filtered = weights * soft_mask
+        else:
+            # Hard threshold
+            hard_mask = (weights > adaptive_threshold).float()
+            weights_filtered = weights * hard_mask
+
+        sum_weights = weights_filtered.sum(dim=-1, keepdim=True)
+        weights_filtered = weights_filtered / torch.clamp(sum_weights, min = 1e-8)
 
         if self.cache_enabled:
             self.last_forward_cache = {
-                'patch_embeddings' : patch_emb.detach(),
-                'cosine_similarities' : logits.detach(),
-                'weights_raw' : weights.detach(),
-                'weights_filtered' : weights_filtered,
-                'mask' : mask.detach(),
-                'threshold' : threshold,
-                'input_shape' : patch.shape
+                'patch_embeddings': patch_emb.detach(),
+                'cosine_similarities': logits.detach(),
+                'weights_raw': weights.detach(),
+                'weights_filtered': weights_filtered.detach(),
+                'base_threshold': threshold,  # Threshold originale
+                'adaptive_threshold': adaptive_threshold.detach(),  # Threshold adattato
+                'max_weights': max_weight.detach(),  # Per analysis
+                'hard_threshold_used': hard_threshold
             }
 
         if enable_ema:
             # Update keys with exponential moving average
-            self.ema(patch_emb, weights)
+            self.ema(patch_emb, weights_filtered)
 
         return weights_filtered
-    
+
     def get_cached_metrics(self):
-        """
-        Get all metrics of last forward pass (if chace enabled)
-
-        Returns:
-            dict : All calculate metrics, None if cache disabled
-        """
-
-        if not self.cache_enabled or self.last_forward_cache is None:
-            return None
+        if self.cache_enabled:
+            return self.last_forward_cache
         
-        cache = self.last_forward_cache
-
-        # Calculate metrics
-        weights_filtered = cache['weights_filtered']
-        weights = cache['weights_raw']
-
-        # Expert assignments
-        expert_assignments = torch.argmax(weights_filtered, dim = -1)
-        assignment_confidence = torch.max(weights_filtered, dim = -1)[0]
-
-        # Routing entropy
-        weights_safe = weights_filtered + 1e-10
-        routing_entropy = - torch.sum(weights_safe * torch.log(weights_safe), dim = -1)
-
-        # Expert utilization
-        num_patches = expert_assignments.numel()
-        utilization = torch.zeros(self.num_experts, device = expert_assignments.device)
-        for expert_idx in range(self.num_experts):
-            utilization[expert_idx] = (expert_assignments == expert_idx).float().sum() / num_patches
-
-        # Keys similarity matrix
-        keys_norm = F.normalize(self.keys, dim=-1)
-        keys_similarity = keys_norm @ keys_norm.T
-
-        # Sparsity metrics
-        sparsity_level = (weights_filtered == 0).float().mean()
-        active_experts_per_patch = (weights_filtered > 0).float().sum(dim = -1)
-
-        return {
-            # Dati base (dal cache)
-            'patch_embeddings': cache['patch_embeddings'],
-            'cosine_similarities': cache['cosine_similarities'],
-            'weights_raw': weights,
-            'weights_filtered': weights_filtered,
-            'threshold': cache['threshold'],
-            
-            # Metriche derivate
-            'expert_assignments': expert_assignments,
-            'assignment_confidence': assignment_confidence,
-            'routing_entropy': routing_entropy,
-            'mean_routing_entropy': routing_entropy.mean().item(),
-            
-            # Utilizzo esperti
-            'expert_utilization': utilization,
-            'max_expert_utilization': utilization.max().item(),
-            'min_expert_utilization': utilization.min().item(),
-            'utilization_std': utilization.std().item(),
-            'utilization_entropy': -(utilization * torch.log(utilization + 1e-10)).sum().item(),
-            
-            # Keys similarity
-            'keys_similarity_matrix': keys_similarity,
-            'keys_max_similarity': keys_similarity[~torch.eye(self.num_experts, dtype=bool, device=keys_similarity.device)].max().item(),
-            'keys_min_similarity': keys_similarity[~torch.eye(self.num_experts, dtype=bool, device=keys_similarity.device)].min().item(),
-            'keys_mean_similarity': keys_similarity[~torch.eye(self.num_experts, dtype=bool, device=keys_similarity.device)].mean().item(),
-            
-            # Sparsity e distribuzione
-            'sparsity_level': sparsity_level.item(),
-            'active_experts_per_patch_mean': active_experts_per_patch.mean().item(),
-            'active_experts_per_patch_std': active_experts_per_patch.std().item(),
-            'mean_max_weight_raw': weights.max(dim=-1)[0].mean().item(),
-            'mean_max_weight_filtered': weights_filtered.max(dim=-1)[0].mean().item(),
-            'low_confidence_patches_pct': (assignment_confidence < 0.5).float().mean().item() * 100
-        }
+        return None
 
     def initialize_keys(self, patches):
         """
