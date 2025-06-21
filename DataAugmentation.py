@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import random
+import math
 
 class DataAgumentation:
     def __init__(self, augment_prob = 0.5, rotation_angles = [90,180,270], patch_size_range = (0.1, 0.3), shuffle_zones = 4):
@@ -24,7 +25,7 @@ class DataAgumentation:
         self.augmentations = [
             self.rotate_img,
             self.shuffle_pixels,
-            self.add_radom_patch
+            self.add_random_patch
         ]
 
     def __call__(self, batch):
@@ -61,22 +62,22 @@ class DataAgumentation:
         angle = random.choice(self.rotation_angles)
 
         # Convert angle in radiant
-        angle_rad = torch.tensor(angle * np.pi / 180.0)
+        angle_rad = angle * math.pi / 180.0
 
         # Create rotation matrix
-        cos_a = torch.cos(angle_rad)
-        sin_a = torch.sin(angle_rad)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
 
         # Create theta matric [H, W]
         theta = torch.tensor([[cos_a, -sin_a, 0],
-                              sin_a, cos_a, 0], dtype=torch.float32)
-        theta = theta.unsqueeze(0) # Add batch dimension
+                              [sin_a, cos_a, 0]], dtype=torch.float32).unsqueeze(0)
 
         # Create grill and applied transform
         grid = F.affine_grid(theta, image.unsqueeze(0).shape, align_corners=False)
         rotated = F.grid_sample(image.unsqueeze(0), grid, align_corners=False)
+        rotated = rotated.squeeze(0)
 
-        return rotated.squeeze(0)
+        return rotated
     
     def shuffle_pixels(self, image):
         """
@@ -130,7 +131,7 @@ class DataAgumentation:
         start_w = random.randint(0, W - patch_w)
 
         # Choose color : black (0) or white (1)
-        patch_color = random.randint([0.0, 1.0])
+        patch_color = random.choice([0.0, 1.0])
 
         # Applied the patch
         augmented[:, start_h:start_h+patch_h, start_w:start_w+patch_w] = patch_color

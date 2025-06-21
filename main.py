@@ -1,5 +1,6 @@
 import wandb as wb
 import os
+os.environ['WANDB_MODE'] = 'offline'
 import io
 import tarfile
 import urllib.request
@@ -22,8 +23,8 @@ from torchvision.transforms import ToPILImage
 
 from torchmetrics import Accuracy
 
-from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
-from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
+# from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
+# from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
 # from Datasets_Classes.PascalVOC import PascalVOCDataset, PascalVOCTrainDataset, PascalVOCValidationDataset
 from Datasets_Classes.PatchExtractor import PatchExtractor
 
@@ -111,14 +112,15 @@ def setup_wandb(
         dropout=0.1,
         ema_alpha=0.99,
         weight_decay=1e-4,
-        threshold=0.5
+        threshold=0.5,
+        router_temperature = 0.5
         ):
     """
     Setup wandb for logging
     """
     wb.init(
         project="PCE",
-        entity="your_entity_name",  # Replace with your WandB entity name
+        entity="mirkzx",  # Replace with your WandB entity name
         config={
             'num_experts': num_exp,
             'kernel_size': kernel_size,
@@ -133,7 +135,8 @@ def setup_wandb(
             'ema_alpha': ema_alpha,
             'weight_decay': weight_decay,
             'threshold': threshold,
-            'current dataset' : current_dataset
+            'current dataset' : current_dataset,
+            'router_temperature' : router_temperature
         }
     )  
 
@@ -376,11 +379,11 @@ def log_prediction_to_wandb(data_batch,
     """
 
     # Convert tensors to numpy if needed
-    if isinstance(data_batch, torch.tensor):
+    if isinstance(data_batch, torch.Tensor):
         data_batch = data_batch.detach().cpu()
-    if isinstance(true_labels, torch.tensor):
+    if isinstance(true_labels, torch.Tensor):
         true_labels = true_labels.detach().cpu()
-    if isinstance(pred_labels, torch.tensor):
+    if isinstance(pred_labels, torch.Tensor):
         pred_labels = pred_labels.detach().cpu()
 
     if len(pred_labels.shape) > 1:
@@ -509,31 +512,49 @@ def training(
     criterion = nn.CrossEntropyLoss()
 
     # Get train params from the last train checkpoint (if exist)
+    print('--- Check train checkpoints ---')
     start_epoch, start_train_batch, train_loss_history, \
     val_loss_history, optimizer, lr_scheduler = train_checkpoints(
                                                     train_checkpoints_path,
                                                     optimizer,
                                                     lr_scheduler)
+    if start_epoch != 0:
+        print(f'Resume training from epoch number : {start_epoch}')
+    if start_train_batch != 0:
+        print(f'Resume batches from batch_idx : {start_train_batch}')
+    print('\n ------------------------ \n')
 
     # Get model from the last model checkpoint (if exist)
+    print('--- Verify model checkpoints ---')
     model = model_checkpoints(train_checkpoints_path, model)
     model.to(device)
+    print('\n ------------------------ \n')
 
     # Setting how often to do training, model and router logging
     save_checkpoint_every = 5
     log_prediction_every = 100
 
+    # Print checkpoint and logging intervals
+    print(f"Checkpoint will be saved every {save_checkpoint_every} batches.")
+    print(f"Predictions will be logged every {log_prediction_every} batches.")
+    print('\n ------------------------ \n')
+
     # Setting early stop params
     best_val_loss = float('inf')
     patience_count = 0
     patience = 10
+    print(f"Patience count starts at {patience_count}, patience is set to {patience}.")
+    print('\n ------------------------ \n')
 
     # Setting mixed precision
     use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
     scaler = GradScaler("cuda") if use_amp else None   # indica il device
     autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
+    print(f"Mixed precision enabled: {use_amp}")
+    print('\n ------------------------ \n')
 
     # Start training
+    print('--- Start training loop ---')
     for epoch in tqdm(range(start_epoch, epochs)):
         model.train()
 
@@ -546,6 +567,9 @@ def training(
 
         accuracy_metrics['top1_val'].reset()
         accuracy_metrics['top5_val'].reset()
+
+        if epoch == 100:
+            model.router.set_keys_trainable(True)
         
         for batch_idx, (data, labels) in enumerate(tqdm(train_loader, desc='Training batches')):
             if epoch == start_epoch and batch_idx < start_train_batch:
@@ -651,7 +675,7 @@ def training(
         val_batches = 0
         
         with torch.no_grad():
-            for batch_idx, (data, labels) in tqdm(val_loader, desc='Validation batches'):
+            for batch_idx, (data, labels) in enumerate(tqdm(val_loader, desc='Validation batches')):
                 data, labels = data.to(device), labels.to(device)
                 
                 with autocast_ctx():
@@ -775,6 +799,10 @@ def training(
 if __name__ == "__main__":
     train_datasets = []
 
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f'-- Start with device : {device} ---')
+    print('\n ------------------------ \n')
+
     # Hyperparameters of model
     num_exp = 4
     kernel_size = 3
@@ -785,17 +813,25 @@ if __name__ == "__main__":
     lr = 0.001
     dropout = 0.1
     weight_decay = 1e-4
-    ema_alpha = 0.99
 
+    # Hyperparameters of router
+    ema_alpha = 0.99
+    router_temperature = 1.0
     threshold = 0.2
     hard_threshold_router = False
 
+    # Training metrics
     epochs = 250
     pre_train_epochs = 150
     fine_tune_epochs = 100
     phase_multipliers = [1.0, 0.3]
-
     batch_size = 32
+
+    print("\n--- Hyperparameters ---")
+    print(f"Model: experts={num_exp}, k={kernel_size}, out_exp={out_channel_exp}, out_rout={out_channel_rout}, layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
+    print(f"Router: ema={ema_alpha}, temp={router_temperature}, thresh={threshold}, hard={hard_threshold_router}")
+    print(f"Training: epochs={epochs} (pre={pre_train_epochs}, fine={fine_tune_epochs}), phases={phase_multipliers}, batch={batch_size}\n")
+    print('\n ------------------------ \n')
 
     train_config={
         'epochs': epochs,
@@ -807,16 +843,18 @@ if __name__ == "__main__":
         'weight_decay': weight_decay,
     }
 
-    # # Create DataLoader for training and validation of all datasets
-    # Load Cifar-10 Sets
-    cifar10_sets = get_cifar10_sets(batch_size)
-    train_datasets.append(cifar10_sets)
+    # Initialize patch extractor
+    patch_extractor = PatchExtractor(patch_size=patch_size)
 
-    # Load TinyImageNet sets
-    tinyimagenet_sets = get_tinyimagenet_sets(batch_size)
-    train_datasets.append(tinyimagenet_sets)
 
-    patch_esxtractor = PatchExtractor(patch_size=patch_size)
+    # # # Create DataLoader for training and validation of all datasets
+    # # Load Cifar-10 Sets
+    # cifar10_sets = get_cifar10_sets(batch_size)
+    # train_datasets.append(cifar10_sets)
+
+    # # Load TinyImageNet sets
+    # tinyimagenet_sets = get_tinyimagenet_sets(batch_size)
+    # train_datasets.append(tinyimagenet_sets)
 
     # Load pascalvoc sets
     # pascalvoc_sets = get_pascalvoc_sets()
@@ -825,15 +863,40 @@ if __name__ == "__main__":
      # idx of the dataset : 
         # 0 -> Cifar10
         # 1 -> Tiny-ImageNet
-    dataset_idx = 0
+    # dataset_idx = 0
         
-    # Define dataset and dataloader
-    train_dataset = train_datasets[dataset_idx]['datasets']['train']
+    # # Define dataset and dataloader
+    # train_dataset = train_datasets[dataset_idx]['datasets']['train']
     
-    train_loader = train_datasets[dataset_idx]['dataloader']['train']
-    validation_loader = train_datasets[dataset_idx]['dataloader']['val']
-    num_classes = train_datasets[dataset_idx]['num_classes']
-    class_names = train_datasets[dataset_idx]['unique_lables']
+    # train_loader = train_datasets[dataset_idx]['dataloader']['train']
+    # validation_loader = train_datasets[dataset_idx]['dataloader']['val']
+    # num_classes = train_datasets[dataset_idx]['num_classes']
+    # class_names = train_datasets[dataset_idx]['unique_lables']
+
+    print(f'--- Loading fake dataset ---')
+    # Create fake dataset
+    num_samples_train = 100
+    num_samples_val = 20
+    num_classes = 10
+    class_names = [chr(ord('a') + i) for i in range(10)]
+
+    # Create fake data
+    fake_train_images = torch.rand(num_samples_train, 3, 32, 32)  # immagini
+    fake_train_labels = torch.randint(0, num_classes, (num_samples_train,))  # labels
+
+    fake_val_images = torch.rand(num_samples_val, 3, 32, 32)
+    fake_val_labels = torch.randint(0, num_classes, (num_samples_val,))
+
+    from torch.utils.data import TensorDataset
+
+    fake_train_dataset = TensorDataset(fake_train_images, fake_train_labels)
+    fake_val_dataset = TensorDataset(fake_val_images, fake_val_labels)
+
+    # create DataLoader
+    fake_train_loader = DataLoader(fake_train_dataset, batch_size=32, shuffle=True)
+    fake_val_loader = DataLoader(fake_val_dataset, batch_size=32, shuffle=False)
+
+    print(f'--- Dataset loaded --- \n')
 
     # Setup wandb for logging
     logger = setup_wandb(
@@ -851,14 +914,17 @@ if __name__ == "__main__":
         ema_alpha=ema_alpha,
         weight_decay=weight_decay,
         threshold=threshold,
-        current_dataset = train_datasets[dataset_idx]['name']
+        router_temperature = router_temperature,
+        current_dataset = 'Fake dataset'
     )
 
+
+    print('--- Loading router and model ---')
     # Divides current dataset in patch for initialize keys and setting input channel for model
-    dataset_patch, _, _ = patch_esxtractor(train_dataset.data)  # Extract patches 
+    dataset_patch, _, _ = patch_extractor(fake_train_dataset.tensors[0])  # Extract patches 
     _, _, C, _, _ = dataset_patch.shape
     
-    router = Router(num_experts=num_exp, out_channel_key=out_channel_exp)
+    router = Router(num_experts=num_exp, temperature=router_temperature)
     router.initialize_keys(dataset_patch) #Initialize router keys with SSP 
 
     # Initialize model, optimizer (Adam) and scheduler
@@ -874,11 +940,12 @@ if __name__ == "__main__":
         dropout=0.1,
         num_classes=num_classes,
         threshold=threshold,
+        enable_router_metrics=True,
         hard_threshold_router = hard_threshold_router,
-        enable_ema=True
     )
-    print('-- Router and model initialized -- ')
+    print('-- Router and model initialized -- \n')
 
+    print('--- Loading optimizer, scheduler, laugmentation class and metrics for accuracy ---')
     optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     lr_scheduler = PCEScheduler(
@@ -889,19 +956,20 @@ if __name__ == "__main__":
     
     augmentation = DataAgumentation()
 
-    metrics = setup_torchmetrics_accuracy(num_classes=num_classes, device= 'cuda' if torch.cuda.is_available() else 'cpu')
+    metrics = setup_torchmetrics_accuracy(num_classes=num_classes, device=device)
+    print('--- All loaded --- \n')
 
+    print('--- Start with training ---')
     training(
         model=model,
-        train_loader=train_loader,
-        val_loader=validation_loader,
-        device= 'cuda' if torch.cuda.is_available() else 'cpu',
+        train_loader=fake_val_loader,
+        val_loader=fake_val_loader,
+        device=device,
         epochs=epochs,
         optimizer=optimizer,
-        augmentation = augmentation,
-        logger=logger,
         lr_scheduler=lr_scheduler,
+        augmentation = augmentation,
+        accuracy_metrics=metrics, 
         class_names = class_names,
-        num_classes=num_classes,
-        accuracy_metrics=metrics,    
+        num_classes=num_classes, 
     )

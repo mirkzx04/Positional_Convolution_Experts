@@ -20,8 +20,8 @@ class PCENetwork(nn.Module):
                     dropout,
                     num_classes,
                     threshold=0.2,
-                    enable_ema=True,
                     enable_router_metrics = True,
+                    hard_threshold_router = False,
                  ):
         super().__init__()
 
@@ -38,7 +38,6 @@ class PCENetwork(nn.Module):
             patch_size (int) -> Size of patches, used in PatchExtractor
             router (Object.router) -> Router object, used for routing through experts
             threshold (float) -> Threshold for experts scores, used in router
-            enable_ema (bool) -> Enable or disable exponential moving average for router keys
         """
 
         self.router = router
@@ -91,8 +90,6 @@ class PCENetwork(nn.Module):
             self.thresholds.append(nn.Parameter(torch.tensor(threshold, dtype=torch.float32)))
 
         self.linear_layer = LazyLinear(self.num_classes)
-
-        self.enable_ema = enable_ema
     
     def get_exp_scores(self,
                        B,
@@ -127,7 +124,7 @@ class PCENetwork(nn.Module):
             self.router.enable_metrics_cache()
             
         # get experts scores
-        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx], enable_ema = self.enable_ema)
+        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx])
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores

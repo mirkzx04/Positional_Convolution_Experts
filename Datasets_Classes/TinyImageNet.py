@@ -64,7 +64,7 @@ class TinyImageNetValidationDataset(Dataset):
         labels = self.labels[idx]
         return images, labels
 
-class TinyImageNet(Dataset):
+class TinyImageNetDataset(Dataset):
     def __init__(self, path):
         """
         Constructor of TinyImageNet dataset
@@ -81,8 +81,8 @@ class TinyImageNet(Dataset):
         self.data_validation = []
         self.labels_validation = []
 
-        self.load_batch_data()
-        self.load_batch_val()
+        # self.load_batch_data()
+        # self.load_batch_val()
 
         self.class_to_idx = self.create_class_mapping()
 

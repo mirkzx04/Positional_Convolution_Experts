@@ -7,7 +7,7 @@ from torch import nn
 from .SSP import SSP
 
 class Router(nn.Module):
-    def __init__(self,num_experts, out_channel_key, enabled_ema=True, ema_alpha=0.99):
+    def __init__(self,num_experts, temperature, ema_alpha=0.99):
         super().__init__()
         """
         Router constructor
@@ -18,13 +18,17 @@ class Router(nn.Module):
         """
 
         self.num_experts = num_experts
-
-        self.ssp = SSP()
-
+        self.temperature = temperature
         self.ema_alpha = ema_alpha
 
         self.last_forward_cache = None
         self.cache_enabled = False
+
+        # Get SSP Classs, use for embedding
+        self.ssp = SSP()
+
+        # Create keys
+        self.keys = nn.Parameter(torch.empty(0), requires_grad=False)
 
     def enable_metrics_cache(self):
         """
@@ -40,7 +44,11 @@ class Router(nn.Module):
         self.cache_enabled = False
         self.last_forward_cache = None
 
-    def forward(self, patch, threshold, hard_threshold = False, enable_ema=True):
+    def set_keys_trainable(self, trainable = False):
+        if trainable:
+            self.keys.requires_grad_(True)
+
+    def forward(self, patch, threshold, hard_threshold = False):
         """
         Forward method of Router
 
@@ -55,10 +63,6 @@ class Router(nn.Module):
         """
         patch_emb = self.ssp(patch)
         patch_emb = F.normalize(patch_emb, dim=-1)
-        
-        if not enable_ema and not isinstance(self.keys, nn.Parameter):
-            # Clone keys in trainable parameter if not using EMA
-            self.keys = nn.Parameter(self.keys.clone().detach(), requires_grad=True)
 
         # Compute cosine simlarity between patch embedding and keys
         logits = patch_emb @ self.keys.T
@@ -100,7 +104,7 @@ class Router(nn.Module):
                 'hard_threshold_used': hard_threshold
             }
 
-        if enable_ema:
+        if not self.keys.requires_grad:
             # Update keys with exponential moving average
             self.ema(patch_emb, weights_filtered)
 
@@ -137,11 +141,10 @@ class Router(nn.Module):
             # Initialize KMeans and fit for get centroids
             kmeans = KMeans(n_clusters = self.num_experts, n_init = 'auto', random_state = 42)
             kmeans.fit(patch_emb.detach().cpu().numpy())
-            centroids = kmeans.cluster_centers_
+            centroids = torch.tensor(kmeans.cluster_centers_, device=patch_emb.device)
+            centroids = F.normalize(centroids, dim = -1)
 
-            # Normalize centroids
-            keys = torch.tensor(centroids, dtype=torch.float32)
-            self.keys = F.normalize(keys, dim=-1)
+            self.keys.data = centroids
 
     def ema(self, patch_embedding, weights):
         """
