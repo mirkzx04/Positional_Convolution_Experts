@@ -572,7 +572,7 @@ def training(
             model.router.set_keys_trainable(True)
         
         for batch_idx, (data, labels) in enumerate(tqdm(train_loader, desc='Training batches')):
-            if epoch == start_epoch and batch_idx < start_train_batch:
+            if epoch < start_epoch and batch_idx < start_train_batch:
                 continue
 
             # Extract data and labels from batch
@@ -749,6 +749,8 @@ def training(
 
             _, router_metrics = calc_router_loss(model, return_stats=True)
 
+            del sample_data, _, router_metrics
+
         # Early stopping check
         if avg_val_total_loss < best_val_loss:
             best_val_loss = avg_val_total_loss
@@ -791,6 +793,8 @@ def training(
         # Reset batch counter for next epoch
         start_train_batch = 0
         torch.cuda.empty_cache()
+
+        lr_scheduler.step()
 
     
     print('Training completed!')
