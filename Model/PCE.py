@@ -198,7 +198,9 @@ class PCENetwork(nn.Module):
 
             X = output
 
-        experts_output = X.flatten(1)
-        logits = self.linear_layer(experts_output)
+        # Appling SSP at final experts output
+        experts_output = X
+        experts_spp_output = self.router.ssp(experts_output)
+        logits = self.linear_layer(experts_spp_output)
 
         return logits
