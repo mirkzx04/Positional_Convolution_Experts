@@ -1,7 +1,7 @@
 from torch import nn as  nn
 
 class ConvExpert(nn.Module):
-    def __init__(self, kernel_size, in_channel, out_channel, dropout, use_residual=True):
+    def __init__(self, in_channel, out_channel, dropout, use_residual=True, kernel_size = 3):
         super().__init__()
         """
         Constructor of one convolution expert

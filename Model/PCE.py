@@ -12,16 +12,12 @@ class PCENetwork(nn.Module):
     def __init__(self, 
                     inpt_channel,
                     num_experts,
-                    kernel_sz_exps,
-                    output_cha_exps,
                     layer_number,
                     patch_size,
                     router,
                     dropout,
                     num_classes,
-                    threshold=0.2,
                     enable_router_metrics = True,
-                    hard_threshold_router = False,
                  ):
         super().__init__()
 
@@ -53,41 +49,39 @@ class PCENetwork(nn.Module):
         self.convs_proj = nn.ModuleList()
         self.thresholds = nn.ParameterList()
 
-        output_cha_exps = output_cha_exps
-        input_cha_keys, input_cha_exps = inpt_channel, inpt_channel  # 3 channels + 4 positional information
+        inpt_channel = inpt_channel # Start channel (3 or 2) + 4 of positional information
+        out_channel = 8
 
         for l in range(layer_number):
             # Defines all convolution parts of the layer, including experts
+            self.convs_proj.append(
+                nn.Conv2d(
+                    in_channels = inpt_channel,
+                    out_channels = 8,
+                    kernel_size=3,
+                    padding=1,
+                )
+            )
             experts = nn.ModuleList([
                 ConvExpert(
-                    kernel_size=kernel_sz_exps,
-                    in_channel=input_cha_exps,
-                    out_channel=output_cha_exps,
+                    in_channel=inpt_channel,
+                    out_channel=None,
                     dropout=dropout
-                ) for _ in range(num_experts)
+                )
             ])
             self.layers.append(experts)
 
             self.final_conv.append(nn.Conv2d(
-                in_channels=output_cha_exps,
-                out_channels=output_cha_exps,
+                in_channels=output_channel,
+                out_channels=out_channel,
                 kernel_size=1,
                 padding=4
             ))
-            self.convs_proj.append(nn.Conv2d(
-                in_channels=input_cha_keys,
-                out_channels=8,
-                kernel_size=3,
-                padding=1
-            ))
 
-            # Update input  and output channel for next layer
-            input_cha_exps = output_cha_exps + 4 # 4 positional information
-            input_cha_keys = output_cha_exps + 4
-            if l % 2 == 1:
-                output_cha_exps *= 2
+            inpt_channel = out_channel + 4
 
-            self.thresholds.append(nn.Parameter(torch.tensor(threshold, dtype=torch.float32)))
+            if l % 2 == 0:
+                output_channel *= 2    
 
         self.linear_layer = LazyLinear(self.num_classes)
     
