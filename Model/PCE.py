@@ -78,10 +78,10 @@ class PCENetwork(nn.Module):
                 padding=4
             ))
 
-            inpt_channel = out_channel + 4
-
             if l % 2 == 0:
-                output_channel *= 2    
+                output_channel *= 2 
+
+            inpt_channel = out_channel + 4   
 
         self.linear_layer = LazyLinear(self.num_classes)
     
