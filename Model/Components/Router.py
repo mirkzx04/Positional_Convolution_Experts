@@ -1,13 +1,16 @@
+import math
+
 import torch
 import torch.nn.functional as F
 
 from sklearn.cluster import KMeans
+
 from torch import nn
 
 from .SSP import SSP
 
 class Router(nn.Module):
-    def __init__(self,num_experts, temperature, ema_alpha=0.99):
+    def __init__(self,num_experts, ema_alpha=0.99):
         super().__init__()
         """
         Router constructor
@@ -18,7 +21,6 @@ class Router(nn.Module):
         """
 
         self.num_experts = num_experts
-        self.temperature = temperature
         self.ema_alpha = ema_alpha
 
         self.last_forward_cache = None
@@ -29,6 +31,16 @@ class Router(nn.Module):
 
         # Create keys
         self.keys = nn.Parameter(torch.empty(0), requires_grad=False)
+
+        # Set parameters of adaptive threshold
+        self.logit_temp = nn.Parameter(torch.tensor(5.)) 
+        self.mask_beta = nn.Parameter(torch.tensor(10.))
+        self.min_experts_active = max(1, 
+            num_experts // 2 if num_experts <= 4 
+            else (2 if num_experts < 8 else num_experts // 4)
+        )
+
+        self.wth_max_c, self.wth_entropy_c, self.wth_gap_c = 0.4, 0.3, 0.3
 
     def enable_metrics_cache(self):
         """
@@ -48,6 +60,72 @@ class Router(nn.Module):
         if trainable:
             self.keys.requires_grad_(True)
 
+    def compute_gap(self, sort_weights):
+        """
+        Compute gap between top-1 expert and successive experts 
+
+        Args : 
+            sort_weights : torch.tensor with shape [B xnP, num_experts] - sorted softmax weights 
+        """
+        k = min(4, self.num_experts - 1)
+        mean_rest = sort_weights[:, 1:k+1].mean(dim = -1, keepdim = True)
+        gap = (sort_weights[:, 0:1] - mean_rest) / (sort_weights[:, 0:1] + 1e-8)
+
+        return torch.clamp(gap, 0., 1.)
+    
+    def compute_adaptive_threshold(self, weights, base_threshold):  
+        """
+        Compute adaptive threshold that it based of multiple statistics metrics
+
+        Args:
+            weights : Tensor(B x nP, num_experts) - softmax weights
+            base_threshold : Float
+        """
+        # Sorted weights
+        sort_weights, _ = weights.sort(dim = -1, descending = True)
+
+        # 1 - w_max => if w_max is high than threshold is lower, w_max is lower than threshold is high
+        max_component = 1.0 - sort_weights[:, 0:1]
+        mean_weight, std_weight = weights.mean(dim = -1, keepdim = True), weights.std(dim = -1, keepdim = True)
+
+        # Compute entropy, high entropy (uniform distribution) => lower threshold
+        # lower entropy (concetrated distribution) => high threshold
+        entropy = -(weights * torch.log(weights + 1e-18)).sum(dim = -1, keepdim = True)
+        max_entropy = math.log(self.num_experts)
+        entropy_component = 1.0 - entropy / max_entropy
+        
+        # Compute top-1 gap
+        gap_component = self.compute_gap(sort_weights)
+
+        # Linear combination of the top router expert weight,
+        # entropy and gap
+        # all weights of components is a learnable parameters to make sure that the model
+        # can understand the importance of each components
+        adaptive_factor = (
+            self.wth_max_c * max_component + self.wth_entropy_c * entropy_component + self.wth_gap_c * gap_component
+        )
+
+        # Compute adaptive threshold
+        adaptive_threshold = base_threshold * (0.5 + adaptive_factor)
+
+        # Defines min and max threshold
+        min_threshold = torch.maximum(
+            torch.tensor(0.05, device=weights.device),
+            mean_weight - 0.5 * std_weight
+        )
+        max_threshold = torch.minimum(
+            torch.tensor(0.7, device=weights.device),
+            sort_weights[:, 0:1] - 0.1 * std_weight
+        )
+        
+        adaptive_threshold = torch.clamp(adaptive_threshold, min=min_threshold, max=max_threshold)
+        
+        if self.min_experts_active <= self.num_experts:
+            kth_weight = sort_weights[:, self.min_experts_active-1 : self.min_experts_active]
+            adaptive_threshold = torch.minimum(adaptive_threshold, kth_weight * 0.9)
+        
+        return adaptive_threshold
+
     def forward(self, patch, threshold, hard_threshold = False):
         """
         Forward method of Router
@@ -66,21 +144,18 @@ class Router(nn.Module):
 
         # Compute cosine simlarity between patch embedding and keys
         logits = patch_emb @ self.keys.T
+        scaled_logits = logits / self.logit_temp + 1e-8
 
         # Calc softmax weights and applied threshold
-        weights = F.softmax(logits, dim=-1)
+        weights = F.softmax(scaled_logits, dim=-1)
         
-        # Adaptive threshold
-        max_weight = weights.max(dim=-1, keepdim=True)[0]
-        adaptive_threshold = torch.clamp(
-            threshold * (2.0 - max_weight),
-            min = 0.01, max = 0.8
-        )
+        # Compute adaptive threshold
+        adaptive_threshold = self.compute_adaptive_threshold(weights=weights, base_threshold=threshold)
 
         if hard_threshold == False:
             # Soft threshdol
             soft_mask = torch.sigmoid(
-                self.temperature * (weights - adaptive_threshold)
+                (self.mask_beta + 1e-8) * (weights - adaptive_threshold)
             )
 
             weights_filtered = weights * soft_mask
@@ -89,6 +164,7 @@ class Router(nn.Module):
             hard_mask = (weights > adaptive_threshold).float()
             weights_filtered = weights * hard_mask
 
+        # Normalize weights
         sum_weights = weights_filtered.sum(dim=-1, keepdim=True)
         weights_filtered = weights_filtered / torch.clamp(sum_weights, min = 1e-8)
 
@@ -100,7 +176,7 @@ class Router(nn.Module):
                 'weights_filtered': weights_filtered.detach(),
                 'base_threshold': threshold,  
                 'adaptive_threshold': adaptive_threshold.detach(),
-                'max_weights': max_weight.detach(), 
+                'max_weights': weights.max(dim = -1, keepdim = True)[0].detach(),
                 'hard_threshold_used': hard_threshold
             }
 
@@ -158,25 +234,22 @@ class Router(nn.Module):
             None, but update keys in place
         """
         with torch.no_grad():
-            for expert_idx in range(self.num_experts):
-                expert_weights = weights[:, expert_idx]
+            # Transpose weights from [nxP, E] -> [E, n x P]
+            w_t = weights.t()
 
-                # Only update is some patches are assigned to this expert
-                if expert_weights.sum() > 0:
-                    # Compute weighted centroid of patches assigned to this expert
-                    weighted_patches = patch_embedding * expert_weights.unsqueeze(-1)
-                    weighted_centroid = weighted_patches.sum(dim=0) / (expert_weights.sum() + 1e-8)
+            # Sum weights for each experts and calc centroids
+            denom = w_t.sum(dim=1, keepdim = True) + 1e-8
+            centroids = (w_t @ patch_embedding) / denom
 
-                    # Normalize the centroid
-                    weighted_centroid = F.normalize(weighted_centroid, dim=-1)
+            # Normalize centroids
+            centroids = F.normalize(centroids, dim = -1)
 
-                    # Update the EMA keys for this expert
-                    self.keys.data[expert_idx] = (
-                        self.ema_alpha * self.keys.data[expert_idx] +
-                        (1 - self.ema_alpha) * weighted_centroid
-                    )
+            # Update all keys 
+            self.keys.data.mul_(self.ema_alpha).add_(
+                centroids * (1.0 - self.ema_alpha)
+            )
 
-                    self.keys.data[expert_idx] = F.normalize(self.keys.data[expert_idx], dim=-1)
+            self.keys.data = F.normalize(self.keys.data, dim = -1)
 
     def reshape_patch(self, patch):
         # Reshape patches from (B, P, C + 2, H, W) to (BxP, (C + 2), H, W)
