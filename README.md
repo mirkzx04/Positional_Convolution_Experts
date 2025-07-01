@@ -19,11 +19,11 @@ Let's dive into the architectural details.
 For simplicity, let's analyze a single layer; all other layers repeat in the same structure.
 
 We have 3 main components:
-1. **PatchExtractor**: The patch extractor takes the feature map as input and splits it into $ P $ patches of size $ N \times N $, enriching the channel dimension with the absolute position of the patch and relative pixel positions, obtaining a matrix $ [B, P, C+4, H, W] $
+1. **PatchExtractor**: The patch extractor takes the feature map as input and splits it into $P$ patches of size $N \times N$, enriching the channel dimension with the absolute position of the patch and relative pixel positions, obtaining a matrix $[B, P, C+4, H, W]$
 
-2. **Router**: The router takes the matrix $ [B, P, 8, H, W] $. SPP (Spatial Pyramid Pooling) is applied to this matrix to obtain a vector $ [num\_experts, 8] $. This vector is used to find similarity between it and the router keys through CosineSimilarity, to which softmax is applied to obtain expert weights. Each expert has a score (the softmax weight) for each patch. Thanks to an adaptive threshold based on how confident the router feels about its prediction, some experts are discarded (the more confident the router is with its choice, the lower the threshold will be).
+2. **Router**: The router takes the matrix $[B, P, 8, H, W]$. SPP (Spatial Pyramid Pooling) is applied to this matrix to obtain a vector $[num\_experts, 8]$. This vector is used to find similarity between it and the router keys through CosineSimilarity, to which softmax is applied to obtain expert weights. Each expert has a score (the softmax weight) for each patch. Thanks to an adaptive threshold based on how confident the router feels about its prediction, some experts are discarded (the more confident the router is with its choice, the lower the threshold will be).
 
-    *(N.B. Before the router can take $ [B, P, 8, H, W] $, a convolution is applied to $ [B, P, C+4, H, W] $ to bring the channel to 8)*
+    *(N.B. Before the router can take $[B, P, 8, H, W]$, a convolution is applied to $[B, P, C+4, H, W]$ to bring the channel to 8)*
 
 3. **Convolutional Expert**: Takes the patch dedicated to it and applies the following operations: *Conv2d -> BatchNorm2d -> ReLU -> Dropout* twice in total (A ResNet block)
 
@@ -32,7 +32,7 @@ We have 3 main components:
 For simplification, let's see the pipeline of a single layer, the operations after applying all experts, and the operations in the output layer.
 
 The layer receives the feature map which is decomposed into patches enriched with positional information that are then passed to the router which will choose which expert (through a weight) to delegate the single patch to.
-The patches are passed to the experts that process them through Conv2D, BatchNorm, ReLU, and Dropout (applied twice) and return them as output. Once all expert feature maps are obtained, these are reaggregated through a weighted sum (the weight of feature map $ i $ is that of expert $ i $). This final feature map is reconstructed by reinserting the patches in their appropriate positions, obtaining a new single feature map to which a final convolution is applied.
+The patches are passed to the experts that process them through Conv2D, BatchNorm, ReLU, and Dropout (applied twice) and return them as output. Once all expert feature maps are obtained, these are reaggregated through a weighted sum (the weight of feature map $i$ is that of expert $i$). This final feature map is reconstructed by reinserting the patches in their appropriate positions, obtaining a new single feature map to which a final convolution is applied.
 
 In the output layer, the incoming feature map is transformed into a vector with SPP which is then passed to an FCL to obtain the final logits for each class in the classification task.
 
@@ -97,7 +97,7 @@ The PCE network consists of three fundamental components for each layer:
 **Input**: Feature map $[B, C, H, W]$
 
 **Process**:
-- Divides the image into $ P $ patches of size $ nP \times nP $
+- Divides the image into $P$ patches of size $nP \times nP$
 - Adds 4 channels of positional information:
   - 2 channels: absolute position of patch in image
   - 2 channels: relative position of pixels in patch
@@ -106,7 +106,7 @@ The PCE network consists of three fundamental components for each layer:
 - $B$ = batch size
 - $P$ = number of patches
 - $C+4$ = original channels + 4 positional channels
-- $H$ and $ W $ = patch dimensions, height and width respectively
+- $H$ and $W$ = patch dimensions, height and width respectively
 
 #### 2. Router
 
@@ -128,19 +128,19 @@ The PCE network consists of three fundamental components for each layer:
 4. **Adaptive Threshold**:
    For adaptive threshold calculation, various statistics are used:
 
-   - $max\_component = 1 - max\_weight$ where $ max\_weight $ is the largest weight in $ weights $
+   - $max\_component = 1 - max\_weight$ where $max\_weight$ is the largest weight in $weights$
    - We calculate entropy and maximum entropy:
       
-      $ entropy = \sum_{i=0}^{n} weights \cdot \log(weights) $, $ max\_entropy = \log(number\_experts) \implies norm\_entropy = \frac{entropy}{max\_entropy}$
+      $entropy = \sum_{i=0}^{n} weights \cdot \log(weights)$, $max\_entropy = \log(number\_experts) \implies norm\_entropy = \frac{entropy}{max\_entropy}$
    
-      $ entropy\_component = norm\_entropy $
+      $entropy\_component = norm\_entropy$
 
    - We calculate Top-1:
       We calculate the probability gap between the most useful expert (the one with highest probability) and all others
 
-   $ adaptive\_threshold = (wth\_max\_c \cdot max\_component) + (wth\_entropy\_c \cdot entropy) + (wth\_gap\_c \cdot gap\_component) $
+   $adaptive\_threshold = (wth\_max\_c \cdot max\_component) + (wth\_entropy\_c \cdot entropy) + (wth\_gap\_c \cdot gap\_component)$
 
-   Finally, weights are filtered to respect the threshold: $ weights\_filtered = weights \cdot soft\_mask $
+   Finally, weights are filtered to respect the threshold: $weights\_filtered = weights \cdot soft\_mask$
 
 **Output**: Normalized weights for each expert $\mathbf{W} \in \mathbb{R}^{B \times P \times E}$ where $E$ = number of experts
 
