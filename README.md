@@ -1,163 +1,259 @@
-# Project: Positional Convolution Experts
+# Intro
 
-## Abstract
+This repository implements the PCE network.
 
-Traditional CNNs process images through a single convolutional channel, potentially limiting the network's ability to capture specific positional information. This project proposes an innovative architecture based on **Positional Convolution Experts** that leverages both content and position of patches to route each patch towards specialized experts, obtaining richer and more representative feature maps.
+## Idea
 
-## Motivation
+Classic CNNs, even the most modern ones, apply the same filter across the entire image, but this can cause the loss of deep semantic details.
+Let's take an image where we have different people with clothes of different colors, a street, trees, and a city panorama (houses, buildings, etc.). Semantically, it's a very rich image. The tree has a well-defined semantic compared to all other elements in the image, and applying the same filter across the entire image could cause the loss of details about the semantics of individual objects, such as the color of leaves or the precise texture of the sidewalk.
 
-The main problem of traditional CNNs lies in their inability to effectively exploit positional information of patches within the image. By dividing the image into patches and using both content and position for routing towards specialized experts, each expert can focus on specific characteristics of specific regions of the image.
+PCE attempts to solve this problem by applying convolutional experts to image portions that become progressively smaller as the network depth increases. This means that in deeper layers, experts will specialize in particularly small patches and will therefore be able to learn semantic relationships of very small image portions that will contain very rich information about a specific object, or part of an object, within the entire image.
 
-## Proposed Architecture
+To decide which expert to delegate the patch to, we use a router that takes as input the patch enriched with two spatial information pieces: the absolute position of the patch within the image and the relative position of pixels within the single patch.
 
-### Fundamental Concept
+## Network Architecture and Pipeline
 
-The architecture is based on an intelligent routing system that:
-- Divides the image into patches
-- Uses content and position information for routing
-- Routes each patch towards specialized experts
-- Combines results to obtain enriched general feature maps
+### Architecture
+Let's dive into the architectural details.
 
-### Detailed Pipeline
+For simplicity, let's analyze a single layer; all other layers repeat in the same structure.
 
-The input image in the network $[B,C,H,W]$ where:
-- B → Batch size
-- C → Channel (RGB)
-- H → Height
-- W → Width
+We have 3 main components:
+1. **PatchExtractor**: The patch extractor takes the feature map as input and splits it into $ P $ patches of size $ N \times N $, enriching the channel dimension with the absolute position of the patch and relative pixel positions, obtaining a matrix $ [B, P, C+4, H, W] $
 
-The image/feature map is divided into patches of dimensions $hP \times wP$, then applying CoordConv at pixel-level we add spatial information about where pixels are located within the patch and where the patch is located relative to the image, obtaining 
-$[B, nP, C +4, H, W]$ where $C+4$ represents the addition of patch coordinates and each pixel within the patches.
-The patches are used before training to initialize keys within the router.
+2. **Router**: The router takes the matrix $ [B, P, 8, H, W] $. SPP (Spatial Pyramid Pooling) is applied to this matrix to obtain a vector $ [num\_experts, 8] $. This vector is used to find similarity between it and the router keys through CosineSimilarity, to which softmax is applied to obtain expert weights. Each expert has a score (the softmax weight) for each patch. Thanks to an adaptive threshold based on how confident the router feels about its prediction, some experts are discarded (the more confident the router is with its choice, the lower the threshold will be).
 
-The keys are initialized through a $1 \times 1$ convolution on the patch resized as $$[B \times P, C+4, H, W]$$, the result of this convolution is passed to SSP to produce patch embeddings $ Em_p $ which will then be applied to K-Means to obtain centroids that will be used as keys $k \in \mathbb{R^{n_{exp} \times d}}$ where $D = (C+4) \times (1^2 + 2^2 + 4^2)$.
+    *(N.B. Before the router can take $ [B, P, 8, H, W] $, a convolution is applied to $ [B, P, C+4, H, W] $ to bring the channel to 8)*
 
-The router will apply cosine similarity between $Em_p$ and $k$ then applying softmax to obtain the selection probabilities of different experts.
-The convolutional experts are defined as $Conv_{kz \times kz} - BatchNorm - ReLU$ and will produce different feature maps that will be concatenated through a weighted sum, where the weights will be the probability scores given by the softmax.
+3. **Convolutional Expert**: Takes the patch dedicated to it and applies the following operations: *Conv2d -> BatchNorm2d -> ReLU -> Dropout* twice in total (A ResNet block)
 
-Once the global feature map is obtained, it will be re-divided into patches in the manner described above and the patches will be re-applied to the router.
+### Pipeline
+
+For simplification, let's see the pipeline of a single layer, the operations after applying all experts, and the operations in the output layer.
+
+The layer receives the feature map which is decomposed into patches enriched with positional information that are then passed to the router which will choose which expert (through a weight) to delegate the single patch to.
+The patches are passed to the experts that process them through Conv2D, BatchNorm, ReLU, and Dropout (applied twice) and return them as output. Once all expert feature maps are obtained, these are reaggregated through a weighted sum (the weight of feature map $ i $ is that of expert $ i $). This final feature map is reconstructed by reinserting the patches in their appropriate positions, obtaining a new single feature map to which a final convolution is applied.
+
+In the output layer, the incoming feature map is transformed into a vector with SPP which is then passed to an FCL to obtain the final logits for each class in the classification task.
 
 ## Training Methodology
 
-### Phase 1: Parameter Stabilization
+The network was trained in 2 phases:
+1. **Stabilization**:
+In this first phase, the network is trained with backpropagation on expert convolutions, projection convolution, and the final post-expert reassembly convolution, while router keys are updated with EMA.
 
-Three alternative approaches for the initial phase:
+2. **Fine Tuning**:
+Router keys are inserted into the computational graph and therefore backpropagation is also performed on them.
 
-#### Option A: Deterministic Routing with Noise
-- Position-based patch routing with controlled noise addition
-- Experts specialize while maintaining mix caused by noise
-- **Advantages**: Guaranteed specialization with diversification
+---
 
-#### Option B: Cosine Similarity with EMA Keys
-Uses cosine similarity with keys initialized through SSP for dimensionality standardization while maintaining pixel-level spatial relationships and K-Means to cluster patches around centroids that will then be used as keys to calculate similarity with patch embeddings obtained through SSP.
-The patch will be passed through the SSP channel to produce a patch embedding $ Em_p $ that will be used for similarity calculation.
-The keys represent moving averages assigned to each patch, maintained outside the computational graph.
+# Positional Convolution Experts (PCE)
 
-#### Option C: Uniform Distribution
-Use of a dummy distribution:
+## Introduction
 
-$w_i = \frac{\text{number of patches}}{\text{number of experts}}$
+This repository implements the **Positional Convolution Experts (PCE)** architecture, an approach to improve the capabilities of traditional convolutional neural networks.
 
-### Phase 2: Router Introduction
+## Motivation
 
-#### MLP Router
-**Characteristics:**
-- More computationally heavy
-- Requires complete backpropagation
-- Pre-processing with CoordConv to enrich patches with positional information
+### Limitations of Traditional CNNs
 
-**Pipeline:**
-1. Application of CoordConv to the patch
-2. Enriched feature map → MLP
-3. Output: probability distribution over experts
-4. Weighted sum of expert feature maps
+Classic CNNs present a fundamental limitation: they apply the same filter across the entire image, potentially losing region-specific semantic details.
 
-#### Key Attention Routing
+### Practical Example
 
-**Process:**
+Consider a complex image containing:
+- People with clothes of different colors
+- A street with specific texture
+- Trees with detailed foliage
+- Urban panorama (houses, buildings)
 
-1. **Key vector formation:**
-   $k \in \mathbb{R}^d$
+Each element has distinct semantics and unique visual characteristics. By applying the same convolutional filter across the entire image, we risk losing:
+- The specific color of leaves
+- The precise texture of the sidewalk
+- Architectural details of buildings
+- Chromatic variations in clothing
 
-2. **Patch embedding:**
-   $p \in \mathbb{R}^{C \times H \times W}$
+### PCE Solution
 
-**Key initialization:**
-Dimension standardization with SSP and clustering with K-Means
+The PCE network solves this problem through:
 
-**Similarity calculation:**
+1. **Specialized Experts**: Each convolutional expert focuses on specific image portions
+2. **Progressive Resolution**: Patches become smaller and more specific in deeper layers
+3. **Intelligent Routing**: A routing system decides which expert is most suitable for each patch
+4. **Positional Information**: Patches are enriched with precise spatial information
 
-$s_i = \frac{Em_p \cdot k}{||Em_p \cdot k||}$
+---
 
-**Routing weights:**
+## Architecture
 
-$w_j = \frac{e^{s_j}}{\sum_j e^{s_j}}$ or softmax
+### Main Components
 
-**Final output:**
+The PCE network consists of three fundamental components for each layer:
 
-$\text{out} = \sum_i w_i \cdot E_i(p)$
+#### 1. PatchExtractor
 
-**Key updates:**
-- PyTorch nn.Parameter (Probably applied after a stabilization phase with EMA) to optimize keys through backpropagation
-- EMA with backpropagable parameters $k_i^{t+1} = \alpha \cdot k_i^t + (1 - \alpha) \cdot v_i$
+**Function**: Division of feature map into enriched patches
 
-#### Gumbel Softmax
-Maintains the Option B approach in the pre-training phase with differentiable sampling.
+**Input**: Feature map $[B, C, H, W]$
 
-### Phase 3: Attention Introduction
+**Process**:
+- Divides the image into $ P $ patches of size $ nP \times nP $
+- Adds 4 channels of positional information:
+  - 2 channels: absolute position of patch in image
+  - 2 channels: relative position of pixels in patch
 
-**Pipeline:**
-1. Concatenation sum → 1×1 Convolution
-2. Resulting feature map → Attention Module
-3. Enriched feature map for subsequent routing
+**Output**: $[B, P, C+4, H, W]$ where:
+- $B$ = batch size
+- $P$ = number of patches
+- $C+4$ = original channels + 4 positional channels
+- $H$ and $ W $ = patch dimensions, height and width respectively
 
-**Evaluation:** Performance is monitored to determine module utility.
+#### 2. Router
 
-## Evaluation and Metrics
+**Function**: Routing system to assign patches to experts
 
-### Object Detection
-**Dataset:** CIFAR-10, Tiny-ImageNet, Pascal VOC
+**Processing Pipeline**:
 
-**Metrics:**
-- **Accuracy:** Top-1 and Top-5 on CIFAR-10 and Tiny-ImageNet
-- **mAP:** Mean Average Precision on Pascal VOC
+1. **Dimensional Projection**:
+   $\mathbb{R}^{B \times P \times (C+4) \times N \times N} \xrightarrow{\text{Conv2D}} \mathbb{R}^{B \times P \times 8 \times N \times N}$
 
-### Segmentation
-**Dataset:** Pascal VOC, Camelyon
+2. **Feature Extraction with SPP**:
+   - Applies Spatial Pyramid Pooling with pool sizes $[1, 2, 4]$
+   - Produces fixed-dimension patch embedding
 
-**Metrics:**
-- **mIoU:** Mean Intersection over Union
+3. **Similarity Calculation**:
+   $\text{similarity} = \frac{\text{patch\_embedding} \cdot \text{router\_keys}^T}{||\text{patch\_embedding}|| \cdot ||\text{router\_keys}||}$
+   $\text{weights} = \text{softmax}(\text{similarity})$
 
-## Expected Results
+4. **Adaptive Threshold**:
+   For adaptive threshold calculation, various statistics are used:
 
-### Performance
-- Accuracy improvement compared to traditional CNNs
-- Competitive performance with modern CNNs
-- Expert specialization based on patch position
+   - $max\_component = 1 - max\_weight$ where $ max\_weight $ is the largest weight in $ weights $
+   - We calculate entropy and maximum entropy:
+      
+      $ entropy = \sum_{i=0}^{n} weights \cdot \log(weights) $, $ max\_entropy = \log(number\_experts) \implies norm\_entropy = \frac{entropy}{max\_entropy}$
+   
+      $ entropy\_component = norm\_entropy $
 
-### Interpretability
-Routing paths offer unique insights:
-- **Assignment analysis:** Which patch is assigned to which expert
-- **Expert specialization:** Understanding of learned characteristics
-- **Architecture optimization:** Removal or reinforcement of experts based on router entropy
+   - We calculate Top-1:
+      We calculate the probability gap between the most useful expert (the one with highest probability) and all others
 
-### Analysis Metrics
-- **Router entropy:** Measure of assignment distribution
-- **Route clustering:** Analysis of routing patterns
-- **Expert statistics:** Average usage and specialization
+   $ adaptive\_threshold = (wth\_max\_c \cdot max\_component) + (wth\_entropy\_c \cdot entropy) + (wth\_gap\_c \cdot gap\_component) $
 
-## Approach Advantages
+   Finally, weights are filtered to respect the threshold: $ weights\_filtered = weights \cdot soft\_mask $
 
-1. **Positional Specialization:** Each expert focuses on specific regions
-2. **Enriched Feature Maps:** Combination of local and global information
-3. **Interpretability:** Ability to analyze routing decisions
-4. **Flexibility:** Multiple training and routing approaches
-5. **Adaptive Optimization:** Ability to modify the network based on route analysis
+**Output**: Normalized weights for each expert $\mathbf{W} \in \mathbb{R}^{B \times P \times E}$ where $E$ = number of experts
 
-## Implementation
+#### 3. Convolutional Experts
 
-The project will be implemented using PyTorch, with particular attention to:
-- Code modularity to test different routing options
-- Detailed logging for performance analysis
-- Routing path visualization for interpretability
-- Systematic benchmarking against baseline architectures
+**Architecture**: ResNet-like block
+
+**Structure**:
+```
+Conv2D → BatchNorm → ReLU → Dropout
+    ↓
+Conv2D → BatchNorm → (+) → ReLU
+                      ↑
+                 Skip Connection
+```
+
+**Function**: Specialized processing of assigned patches
+
+---
+
+## Complete Pipeline
+
+### Single Layer Flow
+
+1. **Patch Extraction**:
+   $\text{Feature Map} \in \mathbb{R}^{B \times C \times H \times W} \xrightarrow{\text{PatchExtractor}} \mathbb{R}^{B \times P \times (C+4) \times N \times N}$
+
+2. **Decision Routing**:
+   $\mathbb{R}^{B \times P \times (C+4) \times N \times N} \xrightarrow{\text{Router}} \text{Expert Weights} \in \mathbb{R}^{B \times P \times \text{num\_experts}}$
+
+3. **Expert Processing**:
+   $\forall i \in [1, \text{num\_experts}]: \quad \text{patch} \xrightarrow{\text{Expert}_i} \text{feature\_map}_i$
+
+4. **Weighted Aggregation**:
+   $\text{output} = \sum_{i=1}^{\text{num\_experts}} w_i \times \text{feature\_map}_i$
+
+5. **Reassembly**:
+   $\text{Patches} \xrightarrow{\text{Reassemble}} \text{Feature Map} \xrightarrow{\text{Conv1x1}} \text{Output Layer}$
+
+### Final Output
+
+In the classification layer:
+$\text{Feature Map} \xrightarrow{\text{SPP}} \text{FC Layer} \xrightarrow{} \text{Logits} \in \mathbb{R}^{B \times \text{num\_classes}}$
+
+---
+
+## Training Methodology
+
+Training occurs in **two distinct phases**:
+
+### Phase 1: Stabilization (Epochs 0-150)
+
+**Trainable Components**:
+- Expert convolutions
+- Projection convolutions
+- Final post-reassembly convolutions
+
+**Fixed Components**:
+- Router keys (updated via EMA)
+
+**EMA Update**:
+$\text{key}_i^{(t+1)} = \alpha \cdot \text{key}_i^{(t)} + (1 - \alpha) \cdot \frac{\sum_j w_{ij} \cdot \text{patch\_embedding}_j}{\sum_j w_{ij}}$
+
+where $w_{ij}$ is the weight of expert $i$ for patch $j$.
+
+### Phase 2: Fine Tuning (Epochs 150+)
+
+**Transition**:
+```python
+if epoch >= 150:
+    router.set_keys_trainable(True)
+```
+
+**Trainable Components**:
+- All parameters from Phase 1
+- Router keys (complete backpropagation)
+
+---
+
+## Technical Features
+
+### Key Initialization
+
+Router keys are initialized through:
+
+1. **K-Means Clustering**:
+   $\text{patch\_embeddings} = \text{SPP}(\text{Conv}(\text{patches}))$
+   $\text{centroids} = \text{K-Means}(\text{patch\_embeddings}, k=\text{num\_experts})$
+   $\text{router.keys} = \frac{\text{centroids}}{||\text{centroids}||_2}$
+
+### Loss Function
+
+**Classification**:
+$\mathcal{L}_{\text{cls}} = \text{CrossEntropy}(\text{logits}, \text{labels})$
+
+**Router Regularization**:
+$\mathcal{L}_{\text{confidence}} = -\frac{1}{BP} \sum_{b=1}^{B} \sum_{p=1}^{P} \sum_{e=1}^{E} w_{bpe} \log(w_{bpe})$
+
+$\mathcal{L}_{\text{collapse}} = \sum_{e=1}^{E} \mathbf{1}_{[\text{usage}_e < 0.01]}$
+
+where $\text{usage}_e = \frac{1}{BP} \sum_{b,p} \mathbf{1}_{[w_{bpe} > 0]}$
+
+$\mathcal{L}_{\text{router}} = \alpha \cdot \mathcal{L}_{\text{confidence}} + \beta \cdot \mathcal{L}_{\text{collapse}}$
+
+**Total Loss**:
+$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + \mathcal{L}_{\text{router}}$
+
+---
+
+## Advantages of the Approach
+
+1. **Spatial Specialization**: Each expert learns region-specific features
+2. **Computational Efficiency**: Only selected experts process patches
+3. **Interpretability**: Routing decisions provide insights into network behavior
+4. **Robustness**: Adaptive threshold prevents expert overfitting
+5. **Scalability**: Architecture can be extended with more layers and experts
