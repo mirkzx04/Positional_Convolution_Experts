@@ -162,7 +162,13 @@ def calculate_gradient_norm(model):
     global_grad_norm = total_grad_norm ** 0.5
     return global_grad_norm
 
-def calc_router_loss(model, confidence_weight = 0.01, anticollapse = 0.001, return_stats = False):
+def calc_router_loss(
+        model, 
+        confidence_weight = 0.01, 
+        anticollapse = 0.001, 
+        threshold_weight = 0.005,
+        return_stats = False
+        ):
     """
     Encourage confident expert selection while preventing expert collapse.
 
@@ -187,7 +193,14 @@ def calc_router_loss(model, confidence_weight = 0.01, anticollapse = 0.001, retu
     experts_unused = (experts_usage < 0.01).float().sum()
     collapse_loss = experts_unused 
 
-    total_loss = confidence_weight * confidence_loss + anticollapse * collapse_loss
+    # Penalize conservative or permissive threshold
+    adaptive_threshold = metrics['adaptive_threshold']
+    threshold_extreme_penalty = torch.relu(adaptive_threshold - 0.7).mean() + \
+                                torch.relu(0.05 - adaptive_threshold).mean()
+
+    total_loss = (confidence_weight * confidence_loss) + \
+                (anticollapse * collapse_loss) + \
+                (threshold_weight * threshold_extreme_penalty)
 
     if return_stats:
         router_loss_metrics = {
@@ -198,6 +211,11 @@ def calc_router_loss(model, confidence_weight = 0.01, anticollapse = 0.001, retu
             'router_loss/unused_experts_count': experts_unused.item(),
             'router_loss/min_expert_usage': experts_usage.min().item(),
             'router_loss/max_expert_usage': experts_usage.max().item(),
+
+            'router_loss/threshold_extreme_penalty': threshold_extreme_penalty.item(),
+            'router_loss/avg_adaptive_threshold': adaptive_threshold.mean().item(),
+            'router_loss/threshold_std': adaptive_threshold.std().item(),
+            'router_loss/threshold_range': (adaptive_threshold.max() - adaptive_threshold.min()).item(),
         }
 
         return total_loss, router_loss_metrics
@@ -749,8 +767,7 @@ def training(
 
             _, router_metrics = calc_router_loss(model, return_stats=True)
 
-            del sample_data, _, router_metrics
-
+            del sample_data
         # Early stopping check
         if avg_val_total_loss < best_val_loss:
             best_val_loss = avg_val_total_loss
