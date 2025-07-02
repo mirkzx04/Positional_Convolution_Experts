@@ -1,7 +1,5 @@
 # Positional Convolution Experts (PCE)
 
-## English Version
-
 ### Introduction
 
 This repository implements the **Positional Convolution Experts (PCE)** network architecture.
