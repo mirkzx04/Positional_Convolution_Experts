@@ -17,6 +17,7 @@ class PCENetwork(nn.Module):
                     router,
                     dropout,
                     num_classes,
+                    hard_threshold_router = False,
                     enable_router_metrics = True,
                  ):
         super().__init__()
@@ -49,6 +50,8 @@ class PCENetwork(nn.Module):
         self.convs_proj = nn.ModuleList()
         self.thresholds = nn.ParameterList()
 
+        self.hard_threshold_router = hard_threshold_router
+
         inpt_channel = inpt_channel # Start channel (3 or 2) + 4 of positional information
         out_channel = 8
 
@@ -65,21 +68,28 @@ class PCENetwork(nn.Module):
             experts = nn.ModuleList([
                 ConvExpert(
                     in_channel=inpt_channel,
-                    out_channel=None,
+                    out_channel=out_channel,
                     dropout=dropout
                 )
             ])
             self.layers.append(experts)
 
             self.final_conv.append(nn.Conv2d(
-                in_channels=output_channel,
+                in_channels=out_channel,
                 out_channels=out_channel,
                 kernel_size=1,
                 padding=4
             ))
 
+            # Defines threshold for experts scores
+            self.thresholds.append(
+                nn.Parameter(
+                    torch.tensor(0.5, dtype=torch.float32, requires_grad=True)
+                )
+            )
+
             if l % 2 == 0:
-                output_channel *= 2 
+                out_channel *= 2 
 
             inpt_channel = out_channel + 4   
 
@@ -118,7 +128,7 @@ class PCENetwork(nn.Module):
             self.router.enable_metrics_cache()
             
         # get experts scores
-        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx])
+        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx], self.hard_threshold_router)
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores

@@ -240,8 +240,8 @@ def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py/data
     cifar10_val_dataloader = DataLoader(cifar10_val_set, batch_size=batch_size, shuffle=False)
 
     # Get numer of classes in labels
-    all_labeles = cifar10.labels_train + cifar10.labels_validation
-    unique_labels = list(set(all_labeles))
+    all_labeles = np.concatenate([cifar10_train_set.lables, cifar10_val_set.lables])
+    unique_labels = np.unique(all_labeles).tolist()
     num_classes = len(unique_labels)
 
     cifar10_dict = {
@@ -276,8 +276,8 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
     tiny_image_net_val_dataloader = DataLoader(dataset=tiny_image_net_val_set, batch_size=batch_size, shuffle=False)
 
     # Get numer of classes in labels
-    all_labeles = tiny_image_net.labels_train + tiny_image_net.labels_validation
-    unique_labels = list(set(all_labeles))
+    all_labeles = np.concatenate([tiny_image_net_train_set.labels, tiny_image_net_val_set.labels])
+    unique_labels = np.unique(all_labeles).tolist()
     num_classes = len(unique_labels)
 
     tiny_image_net_dic = {
@@ -922,7 +922,7 @@ if __name__ == "__main__":
     dataset_patch, _, _ = patch_extractor(train_dataset.data)  # Extract patches 
     _, _, C, _, _ = dataset_patch.shape
     
-    router = Router(num_experts=num_exp, temperature=router_temperature)
+    router = Router(num_experts=num_exp)
     router.initialize_keys(dataset_patch) #Initialize router keys with SSP 
 
     # Initialize model, optimizer (Adam) and scheduler
@@ -930,16 +930,13 @@ if __name__ == "__main__":
     model = PCENetwork(
         inpt_channel= C,
         num_experts = num_exp,
-        kernel_sz_exps = kernel_size,
-        output_cha_exps = out_channel_exp,
         layer_number = layer_number,
         patch_size = patch_size,
         router=router,
         dropout=0.1,
         num_classes=num_classes,
-        threshold=threshold,
         enable_router_metrics=True,
-        hard_threshold_router = hard_threshold_router,
+        hard_threshold_router = False,
     )
     print('-- Router and model initialized -- \n')
 
