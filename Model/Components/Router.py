@@ -177,7 +177,7 @@ class Router(nn.Module):
                 'base_threshold': threshold,  
                 'adaptive_threshold': adaptive_threshold.detach(),
                 'max_weights': weights.max(dim = -1, keepdim = True)[0].detach(),
-                'hard_threshold_used': hard_threshold
+                'hard_threshold_used': hard_threshold,
             }
 
         if not self.keys.requires_grad:
