@@ -106,6 +106,9 @@ class CIFAR10Dataset(Dataset):
             self.data_train.extend(imgs_data)
             self.labels_train.extend(batch_data[b'labels'])
 
+        self.data_train = np.array(self.data_train, dtype=np.float32)
+        self.labels_train = np.array(self.labels_train, dtype=np.int64)
+
     def load_batch_val(self):
         """
         Load validation batch data
@@ -119,6 +122,9 @@ class CIFAR10Dataset(Dataset):
         
         self.data_validation.extend(imgs_data)
         self.labels_validation.extend(batch_data[b'labels'])
+
+        self.data_validation = np.array(self.data_validation, dtype=np.float32)
+        self.labels_validation = np.array(self.labels_validation, dtype=np.int64)
 
     # Unpickle function for cifar10 data
     def read_batch_path(self, path):

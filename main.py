@@ -1,6 +1,6 @@
 import wandb as wb
 import os
-os.environ['WANDB_MODE'] = 'offline'
+# os.environ['WANDB_MODE'] = 'offline'
 import io
 import tarfile
 import urllib.request
@@ -120,7 +120,7 @@ def setup_wandb(
     """
     wb.init(
         project="PCE",
-        entity="mirkzx",  # Replace with your WandB entity name
+        entity="mirkzx-sapienza-universit-di-roma",  # Replace with your WandB entity name
         config={
             'num_experts': num_exp,
             'kernel_size': kernel_size,
@@ -868,12 +868,12 @@ if __name__ == "__main__":
     patch_extractor = PatchExtractor(patch_size=patch_size)
 
 
-    # # # Create DataLoader for training and validation of all datasets
-    # # Load Cifar-10 Sets
-    # cifar10_sets = get_cifar10_sets(batch_size)
-    # train_datasets.append(cifar10_sets)
+    # # Create DataLoader for training and validation of all datasets
+    # Load Cifar-10 Sets
+    cifar10_sets = get_cifar10_sets(batch_size)
+    train_datasets.append(cifar10_sets)
 
-    # # Load TinyImageNet sets
+    # Load TinyImageNet sets
     # tinyimagenet_sets = get_tinyimagenet_sets(batch_size)
     # train_datasets.append(tinyimagenet_sets)
 
@@ -881,41 +881,18 @@ if __name__ == "__main__":
     # pascalvoc_sets = get_pascalvoc_sets()
     # train_datasets.append(pascalvoc_sets)
 
-     # idx of the dataset : 
-        # 0 -> Cifar10
-        # 1 -> Tiny-ImageNet
-    # dataset_idx = 0
+    #  idx of the dataset : 
+    #     0 -> Cifar10
+    #     1 -> Tiny-ImageNet
+    dataset_idx = 0
         
-    # # Define dataset and dataloader
-    # train_dataset = train_datasets[dataset_idx]['datasets']['train']
+    # Define dataset and dataloader
+    train_dataset = train_datasets[dataset_idx]['datasets']['train']
     
-    # train_loader = train_datasets[dataset_idx]['dataloader']['train']
-    # validation_loader = train_datasets[dataset_idx]['dataloader']['val']
-    # num_classes = train_datasets[dataset_idx]['num_classes']
-    # class_names = train_datasets[dataset_idx]['unique_lables']
-
-    print(f'--- Loading fake dataset ---')
-    # Create fake dataset
-    num_samples_train = 100
-    num_samples_val = 20
-    num_classes = 10
-    class_names = [chr(ord('a') + i) for i in range(10)]
-
-    # Create fake data
-    fake_train_images = torch.rand(num_samples_train, 3, 32, 32)  # immagini
-    fake_train_labels = torch.randint(0, num_classes, (num_samples_train,))  # labels
-
-    fake_val_images = torch.rand(num_samples_val, 3, 32, 32)
-    fake_val_labels = torch.randint(0, num_classes, (num_samples_val,))
-
-    from torch.utils.data import TensorDataset
-
-    fake_train_dataset = TensorDataset(fake_train_images, fake_train_labels)
-    fake_val_dataset = TensorDataset(fake_val_images, fake_val_labels)
-
-    # create DataLoader
-    fake_train_loader = DataLoader(fake_train_dataset, batch_size=32, shuffle=True)
-    fake_val_loader = DataLoader(fake_val_dataset, batch_size=32, shuffle=False)
+    train_loader = train_datasets[dataset_idx]['dataloaders']['train']
+    validation_loader = train_datasets[dataset_idx]['dataloaders']['val']
+    num_classes = train_datasets[dataset_idx]['num_classes']
+    class_names = train_datasets[dataset_idx]['unique_lables']
 
     print(f'--- Dataset loaded --- \n')
 
@@ -942,7 +919,7 @@ if __name__ == "__main__":
 
     print('--- Loading router and model ---')
     # Divides current dataset in patch for initialize keys and setting input channel for model
-    dataset_patch, _, _ = patch_extractor(fake_train_dataset.tensors[0])  # Extract patches 
+    dataset_patch, _, _ = patch_extractor(train_dataset.data)  # Extract patches 
     _, _, C, _, _ = dataset_patch.shape
     
     router = Router(num_experts=num_exp, temperature=router_temperature)
@@ -983,8 +960,8 @@ if __name__ == "__main__":
     print('--- Start with training ---')
     training(
         model=model,
-        train_loader=fake_val_loader,
-        val_loader=fake_val_loader,
+        train_loader=train_loader,
+        val_loader=validation_loader,
         device=device,
         epochs=epochs,
         optimizer=optimizer,
