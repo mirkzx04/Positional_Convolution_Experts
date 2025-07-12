@@ -10,7 +10,7 @@ from torch import nn
 from .SSP import SSP
 
 class Router(nn.Module):
-    def __init__(self,num_experts, ema_alpha=0.99):
+    def __init__(self,num_experts, num_layers, proj_channel, ema_alpha=0.9):
         super().__init__()
         """
         Router constructor
@@ -18,6 +18,9 @@ class Router(nn.Module):
         Args:
             out_channel_key -> out channel for convolution of pixel projection
             num_experts -> number of experts in all layer, we use this number for compute cluster with K-Means
+            num_layers -> number of layers in PCE Network
+            proj_channel -> list of out channels for projection convolution in each layer
+            ema_alpha -> Exponential moving average alpha for update keys
         """
 
         self.num_experts = num_experts
@@ -30,10 +33,13 @@ class Router(nn.Module):
         self.ssp = SSP()
 
         # Create keys
-        self.keys = nn.Parameter(torch.empty(0), requires_grad=False)
+        self.keys = nn.ParameterList([
+            nn.Parameter(torch.randn(num_experts, proj_channel[idx]), requires_grad=False)
+            for idx in range(num_layers)
+        ])
 
         # Set parameters of adaptive threshold
-        self.logit_temp = nn.Parameter(torch.tensor(5.)) 
+        self.logit_temp = torch.tensor(5.0, dtype=torch.float32, requires_grad=False) 
         self.mask_beta = nn.Parameter(torch.tensor(10.))
         self.min_experts_active = max(1, 
             num_experts // 2 if num_experts <= 4 
@@ -58,7 +64,8 @@ class Router(nn.Module):
 
     def set_keys_trainable(self, trainable = False):
         if trainable:
-            self.keys.requires_grad_(True)
+            for k in self.keys:
+                k.requires_grad = True
 
     def compute_gap(self, sort_weights):
         """
@@ -126,7 +133,7 @@ class Router(nn.Module):
         
         return adaptive_threshold
 
-    def forward(self, patch, threshold, hard_threshold = False):
+    def forward(self, patch, layer_idx, threshold, hard_threshold = False):
         """
         Forward method of Router
 
@@ -134,6 +141,7 @@ class Router(nn.Module):
             patch -> tensor (B x nP, C + 4, nH, nW)
             threshold -> float, threshold for experts scores
             enable_ema -> bool, enable or disable exponential moving average for keys
+            layer_idx -> int, index of current layer
         
         Returns:
             weights -> Tensor (B x nP, num_experts)
@@ -143,48 +151,48 @@ class Router(nn.Module):
         patch_emb = F.normalize(patch_emb, dim=-1)
 
         # Compute cosine simlarity between patch embedding and keys
-        logits = patch_emb @ self.keys.T
-        scaled_logits = logits / self.logit_temp + 1e-8
+        logits = patch_emb @ self.keys[layer_idx].T
+        scaled_logits = logits * self.logit_temp
 
         # Calc softmax weights and applied threshold
         weights = F.softmax(scaled_logits, dim=-1)
         
         # Compute adaptive threshold
-        adaptive_threshold = self.compute_adaptive_threshold(weights=weights, base_threshold=threshold)
+        # adaptive_threshold = self.compute_adaptive_threshold(weights=weights, base_threshold=threshold)
 
-        if hard_threshold == False:
-            # Soft threshdol
-            soft_mask = torch.sigmoid(
-                (self.mask_beta + 1e-8) * (weights - adaptive_threshold)
-            )
+        # if hard_threshold == False:
+        #     # Soft threshdol
+        #     soft_mask = torch.sigmoid(
+        #         (self.mask_beta + 1e-8) * (weights - adaptive_threshold)
+        #     )
 
-            weights_filtered = weights * soft_mask
-        else:
-            # Hard threshold
-            hard_mask = (weights > adaptive_threshold).float()
-            weights_filtered = weights * hard_mask
+        #     weights_filtered = weights * soft_mask
+        # else:
+        #     # Hard threshold
+        #     hard_mask = (weights > adaptive_threshold).float()
+        #     weights_filtered = weights * hard_mask
 
         # Normalize weights
-        sum_weights = weights_filtered.sum(dim=-1, keepdim=True)
-        weights_filtered = weights_filtered / torch.clamp(sum_weights, min = 1e-8)
+        sum_weights = weights.sum(dim=-1, keepdim=True)
+        weights = weights / torch.clamp(sum_weights, min = 1e-8)
 
         if self.cache_enabled:
             self.last_forward_cache = {
-                'patch_embeddings': patch_emb.detach(),
-                'cosine_similarities': logits.detach(),
-                'weights_raw': weights.detach(),
-                'weights_filtered': weights_filtered.detach(),
-                'base_threshold': threshold,  
-                'adaptive_threshold': adaptive_threshold.detach(),
-                'max_weights': weights.max(dim = -1, keepdim = True)[0].detach(),
-                'hard_threshold_used': hard_threshold,
+                'patch/patch_embeddings': patch_emb.detach(),
+                'ccosine/osine_similarities': logits.detach(),
+                'weights/weights_raw': weights.detach(),
+                # 'weights_filtered': weights_filtered.detach(),
+                # 'base_threshold': threshold,  
+                # 'adaptive_threshold': adaptive_threshold.detach(),
+                # 'hard_threshold_used': hard_threshold,
+                'logits/logits':logits.detach(),
+                'scaled_logits/scaled_logits': scaled_logits.detach(),
             }
-
-        if not self.keys.requires_grad:
+        if self.keys[layer_idx].requires_grad == False:
             # Update keys with exponential moving average
-            self.ema(patch_emb, weights_filtered)
+            self.ema(patch_emb, weights)
 
-        return weights_filtered
+        return weights
 
     def get_cached_metrics(self):
         if self.cache_enabled:
@@ -192,7 +200,7 @@ class Router(nn.Module):
         
         return None
 
-    def initialize_keys(self, patches):
+    def initialize_keys(self, patches, layer_idx):
         """
         Initialize key for routing throught K-Means
 
@@ -205,14 +213,9 @@ class Router(nn.Module):
         """
 
         with torch.no_grad():
-            # Reshape patch (B, nP, C + 4, nH, nW) -> (B x nP, C + 4, nH, nW) and applied projection convolution
-            # pixel projection for create patch embedding with SSP
-            reshape_patches = self.reshape_patch(patch=patches)
-            conv_proj = nn.Conv2d(in_channels=7, kernel_size=3, out_channels=8)
-            patch_proj = conv_proj(reshape_patches)
 
             # Applied SSP for get patch embedding using K-Means
-            patch_emb = self.ssp(patch_proj)
+            patch_emb = self.ssp(patches)
 
             # Initialize KMeans and fit for get centroids
             kmeans = KMeans(n_clusters = self.num_experts, n_init = 'auto', random_state = 42)
@@ -220,9 +223,9 @@ class Router(nn.Module):
             centroids = torch.tensor(kmeans.cluster_centers_, device=patch_emb.device)
             centroids = F.normalize(centroids, dim = -1)
 
-            self.keys.data = centroids
+            self.keys[layer_idx].data.copy_(centroids)
 
-    def ema(self, patch_embedding, weights):
+    def ema(self, patch_embedding, weights, layer_idx):
         """
         Exponential moving average for update keys
 
@@ -245,13 +248,8 @@ class Router(nn.Module):
             centroids = F.normalize(centroids, dim = -1)
 
             # Update all keys 
-            self.keys.data.mul_(self.ema_alpha).add_(
+            self.keys[layer_idx].data.mul_(self.ema_alpha).add_(
                 centroids * (1.0 - self.ema_alpha)
             )
 
-            self.keys.data = F.normalize(self.keys.data, dim = -1)
-
-    def reshape_patch(self, patch):
-        # Reshape patches from (B, P, C + 2, H, W) to (BxP, (C + 2), H, W)
-        B, P, C, H, W = patch.shape
-        return patch.reshape(B*P, C, H, W)
+            self.keys[layer_idx].data = F.normalize(self.keys.data, dim = -1)

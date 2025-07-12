@@ -1,4 +1,3 @@
-import wandb as wb
 import os
 # os.environ['WANDB_MODE'] = 'offline'
 import io
@@ -8,20 +7,11 @@ import pandas as pd
 import numpy as np 
 import matplotlib.pyplot as plt
 
-from tqdm import tqdm
-from PIL import Image
-from contextlib import nullcontext
-from functools import partial
-
 import torch
 from torch import nn
-from torch.optim import Adam
 from torch.utils.data import DataLoader
-from torch.amp import autocast, GradScaler
 
-from torchvision.transforms import ToPILImage
-
-from torchmetrics import Accuracy
+from DataAugmentation import DataAgumentation
 
 from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
 from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
@@ -29,11 +19,10 @@ from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrain
 from Datasets_Classes.PatchExtractor import PatchExtractor
 
 from Model.PCE import PCENetwork
-from Model.Components.Router import Router
 
-from PCEScheduler import PCEScheduler
-
-from DataAugmentation import DataAgumentation
+from Training import Checkpointer
+from Training import Logger
+from Training.Backbone import BackboneCheckpointCallBack, BackboneLitModule, BackboneLoggerCallBack
 
 def download_tiny_imagenet():
     """
@@ -97,70 +86,6 @@ def download_pascal_voc():
         print(f"An error occurred while downloading or extracting the dataset: {e}")
         return None
 
-def setup_wandb(
-        current_dataset,
-        project_name="PCE",
-        num_exp=4,
-        kernel_size=3,
-        out_channel_exp=8,
-        out_channel_rout=20,
-        layer_number=4,
-        patch_size=16,
-        lr=0.001,
-        batch_size=32,
-        epochs=10,
-        dropout=0.1,
-        ema_alpha=0.99,
-        weight_decay=1e-4,
-        threshold=0.5,
-        router_temperature = 0.5
-        ):
-    """
-    Setup wandb for logging
-    """
-    wb.init(
-        project="PCE",
-        entity="mirkzx-sapienza-universit-di-roma",  # Replace with your WandB entity name
-        config={
-            'num_experts': num_exp,
-            'kernel_size': kernel_size,
-            'out_channel_exp': out_channel_exp,
-            'out_channel_rout': out_channel_rout,
-            'layer_number': layer_number,
-            'patch_size': patch_size,
-            'learning_rate': lr,
-            'batch_size': batch_size,
-            'epochs': epochs,
-            'dropout': dropout,
-            'ema_alpha': ema_alpha,
-            'weight_decay': weight_decay,
-            'threshold': threshold,
-            'current dataset' : current_dataset,
-            'router_temperature' : router_temperature
-        }
-    )  
-
-    return wb.config
-
-def calculate_gradient_norm(model):
-    """
-    Calculate norm of gradient
-    
-    Args:
-        model: pytorch model
-        
-    Returns:
-        float: Global norm of gradient
-    """
-    total_grad_norm = 0.0
-    
-    for param in model.parameters():
-        if param.grad is not None:
-            param_norm = torch.norm(param.grad.data).item()
-            total_grad_norm += param_norm ** 2
-    
-    global_grad_norm = total_grad_norm ** 0.5
-    return global_grad_norm
 
 def calc_router_loss(
         model, 
@@ -181,7 +106,7 @@ def calc_router_loss(
         return torch.tensor(0.0, requires_grad=True)
     
     # Get experts weights [B * P, num_experts]
-    expert_weights = metrics['weights_filtered']
+    expert_weights = metrics['weights/weights_raw']
 
     # Confidence loss : Encourage sharp distributions per patch
     # We use entropy : Highet entropy = Less confident, Low entropy = more confident
@@ -194,13 +119,13 @@ def calc_router_loss(
     collapse_loss = experts_unused 
 
     # Penalize conservative or permissive threshold
-    adaptive_threshold = metrics['adaptive_threshold']
-    threshold_extreme_penalty = torch.relu(adaptive_threshold - 0.7).mean() + \
-                                torch.relu(0.05 - adaptive_threshold).mean()
+    # adaptive_threshold = metrics['adaptive_threshold']
+    # threshold_extreme_penalty = torch.relu(adaptive_threshold - 0.7).mean() + \
+    #                             torch.relu(0.05 - adaptive_threshold).mean()
 
     total_loss = (confidence_weight * confidence_loss) + \
-                (anticollapse * collapse_loss) + \
-                (threshold_weight * threshold_extreme_penalty)
+                (anticollapse * collapse_loss) 
+                # (threshold_weight * threshold_extreme_penalty)
 
     if return_stats:
         router_loss_metrics = {
@@ -212,10 +137,10 @@ def calc_router_loss(
             'router_loss/min_expert_usage': experts_usage.min().item(),
             'router_loss/max_expert_usage': experts_usage.max().item(),
 
-            'router_loss/threshold_extreme_penalty': threshold_extreme_penalty.item(),
-            'router_loss/avg_adaptive_threshold': adaptive_threshold.mean().item(),
-            'router_loss/threshold_std': adaptive_threshold.std().item(),
-            'router_loss/threshold_range': (adaptive_threshold.max() - adaptive_threshold.min()).item(),
+            # 'router_loss/threshold_extreme_penalty': threshold_extreme_penalty.item(),
+            # 'router_loss/avg_adaptive_threshold': adaptive_threshold.mean().item(),
+            # 'router_loss/threshold_std': adaptive_threshold.std().item(),
+            # 'router_loss/threshold_range': (adaptive_threshold.max() - adaptive_threshold.min()).item(),
         }
 
         return total_loss, router_loss_metrics
@@ -296,528 +221,435 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
 
     return tiny_image_net_dic
 
-def model_checkpoints(train_checkpoints_path, model):
-    # Check if exist model checkpoint
-    if os.path.exists(f'{train_checkpoints_path}/model_checkpoints.pth'):
-        print(f'Loading model from checkpoint...')
-        model.load_state_dict(torch.load(f'{train_checkpoints_path}/model_checkpoints.pth'))
 
-        print('Model loaded from checkpoint')
+# def calc_cache_router_metrics(cache_data):
+#     """
+#     Calculate router metrics from cached data
 
-    else:
-        print('No model checkpoint founded')
+#     Args:
+#         cahced_data (dict): Cached data from the router
 
-    return model
+#     Returns:
+#         dict: Calculated router metrics
+#     """
+#     all_cache_metrics = []
 
-def train_checkpoints(train_checkpoints_path, optimizer, lr_scheduler):
-    # Check if exist train params checkpoint, included scheduler and optimizer
-    if os.path.exists(f'{train_checkpoints_path}/train_checkpoints.pth'):
-        print('Load training params from checkpoint...')
-        checkpoint = torch.load(f'{train_checkpoints_path}/train_checkpoints.pth')
+#     if cache_data is not None:
+#         cache_metrics = {}
+#         for key, value in cache_data.items():
+#             if isinstance(value,torch.Tensor):
+#                 if value.dim() == 1:
+#                     cache_metrics[key] = value.mean().item()
+#                 else:
+#                     cache_metrics[f'cache_{key}_mean'] = value.mean().item()
+#                     cache_metrics[f'cache_{key}_std'] = value.std().item()  
+#                     cache_metrics[f'cache_{key}_max'] = value.max().item()
+#                     cache_metrics[f'cache_{key}_min'] = value.min().item()
 
-        start_epoch = checkpoint['start_epoch']
-        start_train_batch = checkpoint['train_batch']
+#                     if key == 'cosine_similarity':
+#                         cache_metrics[f'cache_{key}_range'] = (value.max() - value.min()).item()
 
-        train_loss_history = checkpoint['train_history']
-        val_loss_history = checkpoint['val_history']
+#                         sorted_sims = value.sort(dim=-1, descending=True)[0]
+#                         if sorted_sims.shape[-1] > 1:
+#                             top_gatp = (sorted_sims[:, 0] - sorted_sims[:, 1:]).mean().item()
+#                             cache_metrics[f'cache_top_gap'] = top_gatp
+#             else : 
+#                 cache_metrics[f'cache_{key}'] = value
+#         all_cache_metrics.append(cache_metrics)
 
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        lr_scheduler.load_state_dict(checkpoint['scheduler'])
+# def combine_router_metrics(all_cache_metrics, all_calc_metrics):
+#     """
+#     Combine all router metrics from cache and calculated metrics
 
-        print(f'Resuming train from {start_epoch} epoch and {start_train_batch} train batch')
-        
-        return start_epoch, start_train_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler
-    else:
-        print('No train checkpoint founded')
+#     Args:
+#         all_cache_metrics (list): List of cached router metrics
+#         all_calc_metrics (list): List of calculated router metrics
 
-    return 0, 0, [], [], optimizer, lr_scheduler
+#     Returns:
+#         dict: Combined router metrics
+#     """
+#     combined_metrics = {}
 
-def save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, 
-                   epoch, batch_idx, train_loss_history, val_loss_history):
-    """Save model and training state"""
+#     if all_cache_metrics:
+#         for key in all_cache_metrics[0].keys():
+#             combined_metrics[key] = sum(m[key] for m in all_cache_metrics) / len(all_cache_metrics)
 
-    if not os.path.exists(train_checkpoints_path):
-        os.makedirs(train_checkpoints_path)
-    
-    # Save model
-    torch.save(model.state_dict(), f'{train_checkpoints_path}/model_checkpoints.pth')
-    
-    # Save training state
-    torch.save({
-        'start_epoch': epoch,
-        'train_batch': batch_idx,
-        'train_history': train_loss_history,
-        'val_history': val_loss_history,
-        'optimizer': optimizer.state_dict(),
-        'scheduler': lr_scheduler.state_dict()
-    }, f'{train_checkpoints_path}/train_checkpoints.pth')
+#     if all_calc_metrics:
+#         all_keys = set()
+#         for m in all_cache_metrics:
+#             all_keys.update(m.keys())
+#         for key in all_keys:
+#             values = [m[key] for m in all_calc_metrics if key in m]
+#             if values:
+#                 combined_metrics[key] = sum(values) / len(values)
+#     return combined_metrics
 
-def setup_torchmetrics_accuracy(num_classes, device):
-    """
-    Setup Top-1 and Top-5 with torchmetrics
+# def train_backbone(model, train_loader, val_loader, device, epochs, optimizer, lr_scheduler, device):
+#     """
+#     Train the backbone model with the given parameters.
 
-    Args:
-        num_classes(int) : Number of classes in to dataset
-        device : Device (cuda / cpu)
-    """
+#     Args:
+#         model (nn.Module): Backbone model to train.
+#         train_loader (DataLoader): DataLoader for training data.
+#         val_loader (DataLoader): DataLoader for validation data.
+#         device (torch.device): Device to run the training on.
+#         epochs (int): Number of epochs to train.
+#         optimizer (torch.optim.Optimizer): Optimizer for training.
+#         lr_scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
+#     """
+#     model.to(device)
+#     model.train()
 
-    metrics = {
-        'top1_train' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=1).to(device),
-        'top1_val' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=1).to(device),
+#     use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
+#     scaler = GradScaler("cuda") if use_amp else None   # indica il device
+#     autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
 
-        'top5_train' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=5).to(device),
-        'top5_val' : Accuracy(task = 'multiclass', num_classes=num_classes, top_k=5).to(device),
-    }
+#     criterion = nn.CrossEntropyLoss()
 
-    return metrics
+#     for epoch in range(epochs):
+#         for batch_idx, (data, labels) in enumerate(train_loader):
+#             data, labels = data.to(device), labels.to(device)
 
-def log_prediction_to_wandb(data_batch, 
-                            true_labels,
-                            pred_labels, 
-                            batch_class_loss,
-                            batch_router_loss,
-                            batch_total_loss,
-                            class_names = None, 
-                            num_images_to_log = 10, 
-                            epoch = None, 
-                            phase = 'train'):
-    """
-    Log model predictions to wandb with images, true labels and prediction labels
-
-    Args:
-        data_batch (torch.Tensor): Batch of images with shape (B, C, H, W)
-        true_labels  // : True labels with shape (B,)
-        pred_labels // : Predicted labels with shape (B,) or (B, num_classes)
-        class_names ( list) : List of class name for CIFAR-10/other datasets
-        num_images (int) : Number of images to log
-        epoch // : Current epoch number
-        step // : Current step number
-        phase (str) : Training phase ('Training' or 'Validation')
-        batch_loss (float) : loss of the current batch
-    """
-
-    # Convert tensors to numpy if needed
-    if isinstance(data_batch, torch.Tensor):
-        data_batch = data_batch.detach().cpu()
-    if isinstance(true_labels, torch.Tensor):
-        true_labels = true_labels.detach().cpu()
-    if isinstance(pred_labels, torch.Tensor):
-        pred_labels = pred_labels.detach().cpu()
-
-    if len(pred_labels.shape) > 1:
-        pred_labels = torch.argmax(pred_labels, dim = 1)
-    
-    # Limit number of images to log
-    num_images_to_log = min(num_images_to_log, data_batch.shape[0])
-    wandb_images = []
-
-    for i in range(num_images_to_log):
-        # Get singles image and labels
-        img = data_batch[i]
-        true_label = true_labels[i]
-        pred_label = pred_labels[i]
-
-        # Conver images tensor to PIL Image, handle different image formats (CHW vs HWC)
-        if img.shape[0] == 3: 
-            img_pil = ToPILImage()(img)
-        else: #HWC format, transpose to CHW
-            img = img.permute(2, 0, 1)
-            img_pil = ToPILImage()(img)
-
-        # Create caption with true and predicted labels
-        true_class = class_names[true_label] if true_label < len(class_names) else f'True classes : {true_label}'
-        pred_class = class_names[pred_label] if pred_label < len(class_names) else f'Predicted classes : {pred_label}'
-
-        is_correct = "✓" if true_label == pred_label else "✗"
-        caption = f'{is_correct} True : {true_class} | Pred : {pred_class} \n \
-                    loss metrics : batch classification loss : {batch_class_loss} ||  \
-                    batch router loss : {batch_router_loss} || batch total loss : {batch_total_loss}'
-
-        # Create wandb image object
-        wandb_img = wb.Image(
-            img_pil,
-            caption=caption
-        )
-
-        wandb_images.append(wandb_img)
-    
-    # Log to wandb
-    log_dict = {f'{phase}_predictions' : wandb_images}
-    wb.log(log_dict, step = epoch)
-
-def log_train_metrics_to_wandb(
-    avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
-    train_top5_acc, avg_val_classification_loss, avg_val_router_loss, 
-    avg_val_total_loss, val_top1_acc, val_top5_acc, lr, epoch, gradient_norm, 
-    best_val_loss, router_metrics
-    ):
-    """
-    Log train metrics to wandb
-    
-    avg_train_class_loss=avg_train_class_loss,
-            avg_train_router_loss=avg_train_router_loss,
-            avg_train_total_loss=avg_train_total_loss,
-            train_top1_acc=train_top1_acc,
-            train_top5_acc = train_top5_acc,
-            avg_val_classification_loss=avg_val_classification_loss,
-            avg_val_router_loss=avg_val_router_loss,
-            avg_val_total_loss=avg_val_total_loss,
-            val_top1_acc=val_top1_acc,
-            val_top5_acc = val_top5_acc,
-            lr=lr,
-            epoch=epoch,
-            gradient_norm=gradient_norm,
-            best_val_loss=best_val_loss,
-            router_metrics = router_metrics
-
-    Args:
-    avg_train_class_loss (float): Average training classification loss
-    avg_train_router_loss (float): Average training router loss
-    avg_train_total_loss (float): Average training total loss
-    train_accuracy (float): Training accuracy
-    avg_val_classification_loss (float): Average validation classification loss
-    avg_val_router_loss (float): Average validation router loss
-    avg_val_total_loss (float): Average validation total loss
-    val_accuracy (float): Validation accuracy
-    lr (float): Current learning rate
-    epoch (int): Current training epoch
-    gradient_norm (float): Norm of gradient
-    best_val_loss (float): Best validation loss
-    """
-
-    log_dict = {
-        'avg_train_class_loss': avg_train_class_loss,
-        'avg_train_router_loss': avg_train_router_loss,
-        'avg_train_total_loss': avg_train_total_loss,
-        'train_top1_acc': train_top1_acc,
-        'train_top5_acc' : train_top5_acc,
-        'avg_val_classification_loss': avg_val_classification_loss,
-        'avg_val_router_loss': avg_val_router_loss,
-        'avg_val_total_loss': avg_val_total_loss,
-        'val_top1_acc': val_top1_acc,
-        'val_top5_acc' : val_top5_acc,
-        'lr': lr,
-        'epoch': epoch,
-        'gradient_norm': gradient_norm,
-        'best_val_loss': best_val_loss,
-    }
-
-    # Adding router metrics if avaible
-    if router_metrics:
-        log_dict.update(router_metrics)
-    
-    wb.log(log_dict, step=epoch)
-
-def training(
-        model, 
-        train_loader, 
-        val_loader, 
-        device,
-        epochs,
-        optimizer, 
-        lr_scheduler,
-        augmentation,
-        accuracy_metrics,
-        class_names,
-        num_classes,
-        train_checkpoints_path = './checkpoints'):
-    
-    # Setting train and val loader
-    train_loader = train_loader
-    val_loader = val_loader 
-
-    # Set loss
-    criterion = nn.CrossEntropyLoss()
-
-    # Get train params from the last train checkpoint (if exist)
-    print('--- Check train checkpoints ---')
-    start_epoch, start_train_batch, train_loss_history, \
-    val_loss_history, optimizer, lr_scheduler = train_checkpoints(
-                                                    train_checkpoints_path,
-                                                    optimizer,
-                                                    lr_scheduler)
-    if start_epoch != 0:
-        print(f'Resume training from epoch number : {start_epoch}')
-    if start_train_batch != 0:
-        print(f'Resume batches from batch_idx : {start_train_batch}')
-    print('\n ------------------------ \n')
-
-    # Get model from the last model checkpoint (if exist)
-    print('--- Verify model checkpoints ---')
-    model = model_checkpoints(train_checkpoints_path, model)
-    model.to(device)
-    print('\n ------------------------ \n')
-
-    # Setting how often to do training, model and router logging
-    save_checkpoint_every = 5
-    log_prediction_every = 100
-
-    # Print checkpoint and logging intervals
-    print(f"Checkpoint will be saved every {save_checkpoint_every} batches.")
-    print(f"Predictions will be logged every {log_prediction_every} batches.")
-    print('\n ------------------------ \n')
-
-    # Setting early stop params
-    best_val_loss = float('inf')
-    patience_count = 0
-    patience = 10
-    print(f"Patience count starts at {patience_count}, patience is set to {patience}.")
-    print('\n ------------------------ \n')
-
-    # Setting mixed precision
-    use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
-    scaler = GradScaler("cuda") if use_amp else None   # indica il device
-    autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
-    print(f"Mixed precision enabled: {use_amp}")
-    print('\n ------------------------ \n')
-
-    # Start training
-    print('--- Start training loop ---')
-    for epoch in tqdm(range(start_epoch, epochs)):
-        model.train()
-
-        epoch_train_loss = epoch_router_loss = epoch_total_loss = 0
-        batch_count = 0
-
-        # Reset accuracy metrics
-        accuracy_metrics['top1_train'].reset()
-        accuracy_metrics['top5_train'].reset()
-
-        accuracy_metrics['top1_val'].reset()
-        accuracy_metrics['top5_val'].reset()
-
-        if epoch == 100:
-            model.router.set_keys_trainable(True)
-        
-        for batch_idx, (data, labels) in enumerate(tqdm(train_loader, desc='Training batches')):
-            if epoch < start_epoch and batch_idx < start_train_batch:
-                continue
-
-            # Extract data and labels from batch
-            data, labels = data.to(device), labels.to(device)
-
-            # transform data with data augmentation
-            data = augmentation(data)
-
-            # Forward pass
-            logits = model(data)
-            classification_loss = criterion(logits, labels)
+#             optimizer.zero_grad()
+#             outputs = model(data)
+#             loss = criterion(outputs, labels)
             
-            # Calculate variance_loss and total loss
-            router_loss = calc_router_loss(model)
-            model.router.disable_metrics_cache()
-            total_loss = classification_loss + router_loss
+#             if use_amp:
+#                 scaler.scale(loss).backward()
+#                 scaler.unscale__(optimizer)
+#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+#                 scaler.step(optimizer)
+#                 scaler.update()
+#             else:
+#                 loss.backward()
+#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+#                 optimizer.step()
 
-            # Backward pass
-            optimizer.zero_grad()
-            if use_amp:
-                scaler.scale(total_loss).backward()
-                # unscale before clipping
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                total_loss.backward()
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-                optimizer.step()
+#         lr_scheduler.step()
 
-            # # Track losses
-            batch_class_loss = classification_loss.item()
-            batch_router_loss = router_loss.item()
-            batch_total_loss = total_loss.item()
-
-            epoch_train_loss += batch_class_loss
-            epoch_router_loss += batch_router_loss
-            epoch_total_loss += batch_total_loss
-            train_loss_history.append({
-                'epoch' : epoch,
-                'batch' : batch_idx,
-                'classification_loss' : batch_class_loss,
-                'router_loss' : batch_router_loss,
-                'total_loss' : batch_total_loss
-            })
-            batch_count += 1
-
-            # Update torchmetrics for training (Top-1 and Top-5)
-            accuracy_metrics['top1_train'].update(logits, labels)
-            if num_classes >= 5:
-                accuracy_metrics['top5_train'].update(logits, labels)
-            
-            # Update actual batch idx
-            actual_batch_idx = batch_idx
-
-            # Save checkpoint
-            if actual_batch_idx % save_checkpoint_every == 0:
-                save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, epoch, actual_batch_idx,
-                                train_loss_history, val_loss_history)
-
-            if actual_batch_idx % log_prediction_every == 0:
-                with torch.no_grad():
-
-                    # Limit sample size
-                    log_size = min(10, data.shape[0])
-
-                    # transfer to CPU 
-                    sample_data = data[:log_size].detach().cpu()
-                    sample_labels = labels[:log_size].detach().cpu()
-                    sample_logits = logits[:log_size].detach().cpu()
-
-                    pred_probs = torch.softmax(sample_logits, dim=-1)
-
-                    log_prediction_to_wandb(
-                        data_batch=sample_data,
-                        true_labels=sample_labels,
-                        pred_labels=pred_probs,
-                        batch_class_loss = batch_class_loss,
-                        batch_router_loss = batch_router_loss,
-                        batch_total_loss = batch_total_loss,
-                        class_names=class_names,
-                        num_images_to_log=log_size,
-                        epoch= epoch,
-                        phase = 'train'
-                    )
-
-            del data, classification_loss, router_loss, total_loss, logits
-
-        # Calculate epoch metrics
-        avg_train_class_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
-        avg_train_router_loss = epoch_router_loss / batch_count if batch_count > 0 else 0
-        avg_train_total_loss = epoch_total_loss / batch_count if batch_count > 0 else 0
-        
-        # Validation phase
-        model.eval()
-        val_class_loss = 0.0
-        val_router_loss = 0.0
-        val_total_loss = 0.0
-        val_batches = 0
-        
-        with torch.no_grad():
-            for batch_idx, (data, labels) in enumerate(tqdm(val_loader, desc='Validation batches')):
-                data, labels = data.to(device), labels.to(device)
-                
-                with autocast_ctx():
-                    logits = model(data)
-                
-                model.router.disable_metrics_cache()
-                classification_loss = criterion(logits, labels)
-
-                router_loss = calc_router_loss(model)
-                total_loss = classification_loss + router_loss
-
-                val_class_loss += classification_loss.item()
-                val_router_loss += router_loss.item()
-                val_total_loss += total_loss.item()
-                
-                val_batches += 1
-
-                accuracy_metrics['top1_val'].update(logits, labels)
-                if num_classes >= 5:
-                    accuracy_metrics['top5_val'].update(logits, labels)
-
-                if batch_idx % log_prediction_every == 0:
-                   with torch.no_grad():
-
-                    # Limit sample size
-                    log_size = min(10, data.shape[0])
-
-                    # transfer to CPU 
-                    sample_data = data[:log_size].detach().cpu()
-                    sample_labels = labels[:log_size].detach().cpu()
-                    sample_logits = logits[:log_size].detach().cpu()
-
-                    pred_probs = torch.softmax(sample_logits, dim=-1)
-
-                    log_prediction_to_wandb(
-                        data_batch=sample_data,
-                        true_labels=sample_labels,
-                        pred_labels=pred_probs,
-                        batch_class_loss = val_class_loss,
-                        batch_router_loss = val_router_loss,
-                        batch_total_loss = val_total_loss,
-                        class_names=class_names,
-                        num_images_to_log=log_size,
-                        epoch= epoch,
-                        phase = 'validation'
-                    )
-
-                del data, labels, logits, classification_loss, router_loss, total_loss
-
-        # Calculate epoch metrics
-        avg_val_classification_loss = val_class_loss / val_batches if val_batches > 0 else 0
-        avg_val_router_loss = val_router_loss / val_batches if val_batches > 0 else 0
-        avg_val_total_loss = val_total_loss / val_batches if val_batches > 0 else 0
-
-        val_loss_history.append(avg_val_total_loss)
-
-        # Compute final accuracy metrics
-        train_top1_acc = accuracy_metrics['top1_train'].compute().item() * 100
-        train_top5_acc = accuracy_metrics['top5_train'].compute().item() * 100 if num_classes >= 5 else 0
-
-        val_top1_acc = accuracy_metrics['top1_val'].compute().item() * 100
-        val_top5_acc = accuracy_metrics['top5_val'].compute().item() * 100 if num_classes >= 5 else 0
-        
-        # Calc router metrics every 5 epochs
-        router_metrics = None
-        with torch.no_grad():
-            # Get sample per router metrics
-            sample_data, _ = next(iter(val_loader))
-            sample_data = sample_data[:8].to(device)
-            _ = model(sample_data)
-
-            _, router_metrics = calc_router_loss(model, return_stats=True)
-
-            del sample_data
-        # Early stopping check
-        if avg_val_total_loss < best_val_loss:
-            best_val_loss = avg_val_total_loss
-            patience_count = 0
-
-            # Save best model
-            torch.save(model.state_dict(), f'{train_checkpoints_path}/best_model.pth')
-        else:
-            patience_count += 1
-
-        if patience_count > patience:
-            print(f'Ealry Stop')
-            break
-
-        lr = optimizer.param_groups[0]['lr']
-        gradient_norm = calculate_gradient_norm(model)
-
-        log_train_metrics_to_wandb(
-            avg_train_class_loss=avg_train_class_loss,
-            avg_train_router_loss=avg_train_router_loss,
-            avg_train_total_loss=avg_train_total_loss,
-            train_top1_acc=train_top1_acc,
-            train_top5_acc = train_top5_acc,
-            avg_val_classification_loss=avg_val_classification_loss,
-            avg_val_router_loss=avg_val_router_loss,
-            avg_val_total_loss=avg_val_total_loss,
-            val_top1_acc=val_top1_acc,
-            val_top5_acc = val_top5_acc,
-            lr=lr,
-            epoch=epoch,
-            gradient_norm=gradient_norm,
-            best_val_loss=best_val_loss,
-            router_metrics = router_metrics
-        )
-        
-        # Save checkpoint at end of epoch
-        save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
-                       epoch + 1, 0, train_loss_history, val_loss_history)
-        
-        # Reset batch counter for next epoch
-        start_train_batch = 0
-        torch.cuda.empty_cache()
-
-        lr_scheduler.step()
-
+# def training(
+#         model, 
+#         train_loader, 
+#         val_loader, 
+#         device,
+#         epochs,
+#         optimizer, 
+#         lr_scheduler,
+#         augmentation,
+#         accuracy_metrics,
+#         class_names,
+#         num_classes,
+#         train_checkpoints_path = './checkpoints'):
     
-    print('Training completed!')
-    return model, train_loss_history, val_loss_history
+#     # Setting train and val loader
+#     train_loader = train_loader
+#     val_loader = val_loader 
+
+#     # Set loss
+#     criterion = nn.CrossEntropyLoss()
+
+#     # Get train params from the last train checkpoint (if exist)
+#     print('--- Check train checkpoints ---')
+#     start_epoch, start_train_batch, train_loss_history, \
+#     val_loss_history, optimizer, lr_scheduler = train_checkpoints(
+#                                                     train_checkpoints_path,
+#                                                     optimizer,
+#                                                     lr_scheduler)
+#     if start_epoch != 0:
+#         print(f'Resume training from epoch number : {start_epoch}')
+#     if start_train_batch != 0:
+#         print(f'Resume batches from batch_idx : {start_train_batch}')
+#     print('\n ------------------------ \n')
+
+#     # Get model from the last model checkpoint (if exist)
+#     print('--- Verify model checkpoints ---')
+#     model = model_checkpoints(train_checkpoints_path, model)
+#     model.to(device)
+#     print('\n ------------------------ \n')
+
+#     # Setting how often to do training, model and router logging
+#     save_checkpoint_every = 5
+#     log_prediction_every = 100
+
+#     # Print checkpoint and logging intervals
+#     print(f"Checkpoint will be saved every {save_checkpoint_every} batches.")
+#     print(f"Predictions will be logged every {log_prediction_every} batches.")
+#     print('\n ------------------------ \n')
+
+#     # Setting early stop params
+#     best_val_loss = float('inf')
+#     patience_count = 0
+#     patience = 10
+#     print(f"Patience count starts at {patience_count}, patience is set to {patience}.")
+#     print('\n ------------------------ \n')
+
+#     # Setting mixed precision
+#     use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
+#     scaler = GradScaler("cuda") if use_amp else None   # indica il device
+#     autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
+#     print(f"Mixed precision enabled: {use_amp}")
+#     print('\n ------------------------ \n')
+
+#     # Start training
+#     print('--- Start training loop ---')
+#     for epoch in tqdm(range(start_epoch, epochs)):
+#         model.train()
+
+#         epoch_train_loss = epoch_router_loss = epoch_total_loss = 0
+#         batch_count = 0
+
+#         # Reset accuracy metrics
+#         accuracy_metrics['top1_train'].reset()
+#         accuracy_metrics['top5_train'].reset()
+
+#         accuracy_metrics['top1_val'].reset()
+#         accuracy_metrics['top5_val'].reset()
+
+#         if epoch == 100:
+#             model.router.set_keys_trainable(True)
+        
+#         for batch_idx, (data, labels) in enumerate(tqdm(train_loader, desc='Training batches')):
+#             if epoch < start_epoch and batch_idx < start_train_batch:
+#                 continue
+
+#             # Extract data and labels from batch
+#             data, labels = data.to(device), labels.to(device)
+
+#             # transform data with data augmentation
+#             data = augmentation(data)
+
+#             # Forward pass
+#             logits = model(data)
+#             classification_loss = criterion(logits, labels)
+            
+#             # Calculate variance_loss and total loss
+#             router_loss = calc_router_loss(model)
+#             model.router.disable_metrics_cache()
+#             total_loss = classification_loss + router_loss
+
+#             # Backward pass
+#             optimizer.zero_grad()
+#             if use_amp:
+#                 scaler.scale(total_loss).backward()
+#                 # unscale before clipping
+#                 scaler.unscale_(optimizer)
+#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+#                 scaler.step(optimizer)
+#                 scaler.update()
+#             else:
+#                 total_loss.backward()
+#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+#                 optimizer.step()
+
+#             # # Track losses
+#             batch_class_loss = classification_loss.item()
+#             batch_router_loss = router_loss.item()
+#             batch_total_loss = total_loss.item()
+
+#             epoch_train_loss += batch_class_loss
+#             epoch_router_loss += batch_router_loss
+#             epoch_total_loss += batch_total_loss
+#             train_loss_history.append({
+#                 'epoch' : epoch,
+#                 'batch' : batch_idx,
+#                 'classification_loss' : batch_class_loss,
+#                 'router_loss' : batch_router_loss,
+#                 'total_loss' : batch_total_loss
+#             })
+#             batch_count += 1
+
+#             # Update torchmetrics for training (Top-1 and Top-5)
+#             accuracy_metrics['top1_train'].update(logits, labels)
+#             if num_classes >= 5:
+#                 accuracy_metrics['top5_train'].update(logits, labels)
+            
+#             # Update actual batch idx
+#             actual_batch_idx = batch_idx
+
+#             # Save checkpoint
+#             if actual_batch_idx % save_checkpoint_every == 0:
+#                 save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, epoch, actual_batch_idx,
+#                                 train_loss_history, val_loss_history)
+
+#             if actual_batch_idx % log_prediction_every == 0:
+#                 with torch.no_grad():
+
+#                     # Limit sample size
+#                     log_size = min(10, data.shape[0])
+
+#                     # transfer to CPU 
+#                     sample_data = data[:log_size].detach().cpu()
+#                     sample_labels = labels[:log_size].detach().cpu()
+#                     sample_logits = logits[:log_size].detach().cpu()
+
+#                     pred_probs = torch.softmax(sample_logits, dim=-1)
+
+#                     log_prediction_to_wandb(
+#                         data_batch=sample_data,
+#                         true_labels=sample_labels,
+#                         pred_labels=pred_probs,
+#                         batch_class_loss = batch_class_loss,
+#                         batch_router_loss = batch_router_loss,
+#                         batch_total_loss = batch_total_loss,
+#                         class_names=class_names,
+#                         num_images_to_log=log_size,
+#                         epoch= epoch,
+#                         phase = 'train'
+#                     )
+
+#             del data, classification_loss, router_loss, total_loss, logits
+
+#         # Calculate epoch metrics
+#         avg_train_class_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
+#         avg_train_router_loss = epoch_router_loss / batch_count if batch_count > 0 else 0
+#         avg_train_total_loss = epoch_total_loss / batch_count if batch_count > 0 else 0
+        
+#         # Validation phase
+#         model.eval()
+#         val_class_loss = 0.0
+#         val_router_loss = 0.0
+#         val_total_loss = 0.0
+#         val_batches = 0
+        
+#         with torch.no_grad():
+#             for batch_idx, (data, labels) in enumerate(tqdm(val_loader, desc='Validation batches')):
+#                 data, labels = data.to(device), labels.to(device)
+                
+#                 with autocast_ctx():
+#                     logits = model(data)
+                
+#                 model.router.disable_metrics_cache()
+#                 classification_loss = criterion(logits, labels)
+
+#                 router_loss = calc_router_loss(model)
+#                 total_loss = classification_loss + router_loss
+
+#                 val_class_loss += classification_loss.item()
+#                 val_router_loss += router_loss.item()
+#                 val_total_loss += total_loss.item()
+                
+#                 val_batches += 1
+
+#                 accuracy_metrics['top1_val'].update(logits, labels)
+#                 if num_classes >= 5:
+#                     accuracy_metrics['top5_val'].update(logits, labels)
+
+#                 if batch_idx % log_prediction_every == 0:
+#                    with torch.no_grad():
+
+#                     # Limit sample size
+#                     log_size = min(10, data.shape[0])
+
+#                     # transfer to CPU 
+#                     sample_data = data[:log_size].detach().cpu()
+#                     sample_labels = labels[:log_size].detach().cpu()
+#                     sample_logits = logits[:log_size].detach().cpu()
+
+#                     pred_probs = torch.softmax(sample_logits, dim=-1)
+
+#                     log_prediction_to_wandb(
+#                         data_batch=sample_data,
+#                         true_labels=sample_labels,
+#                         pred_labels=pred_probs,
+#                         batch_class_loss = val_class_loss,
+#                         batch_router_loss = val_router_loss,
+#                         batch_total_loss = val_total_loss,
+#                         class_names=class_names,
+#                         num_images_to_log=log_size,
+#                         epoch= epoch,
+#                         phase = 'validation'
+#                     )
+
+#                 del data, labels, logits, classification_loss, router_loss, total_loss
+
+#         # Calculate epoch metrics
+#         avg_val_classification_loss = val_class_loss / val_batches if val_batches > 0 else 0
+#         avg_val_router_loss = val_router_loss / val_batches if val_batches > 0 else 0
+#         avg_val_total_loss = val_total_loss / val_batches if val_batches > 0 else 0
+
+#         val_loss_history.append(avg_val_total_loss)
+
+#         # Compute final accuracy metrics
+#         train_top1_acc = accuracy_metrics['top1_train'].compute().item() * 100
+#         train_top5_acc = accuracy_metrics['top5_train'].compute().item() * 100 if num_classes >= 5 else 0
+
+#         val_top1_acc = accuracy_metrics['top1_val'].compute().item() * 100
+#         val_top5_acc = accuracy_metrics['top5_val'].compute().item() * 100 if num_classes >= 5 else 0
+        
+#         # Calc router metrics every 5 epochs
+#         router_metrics = None
+#         with torch.no_grad():
+#             # Get samples per router metrics
+#             all_calc_metrics = []
+#             num_samples_batches = min(5, len(train_loader))
+
+#             for i, (data, _) in enumerate(train_loader):
+#                 if i >= num_samples_batches:
+#                     break
+
+#                 sample_data = data[:8].to(device)
+#                 with autocast_ctx():
+#                     _ = model(sample_data)
+#                 _, batch_router_metrcis = calc_router_loss(model, return_stats=True)
+#                 cache_data = model.router.get_cached_metrics()
+#                 all_calc_metrics.append(batch_router_metrcis)
+
+#                 # Process cache metrics
+#                 all_cache_metrics = calc_cache_router_metrics(cache_data)
+
+#         # Combine all metrics
+#         router_metrics = combine_router_metrics(all_cache_metrics, all_calc_metrics)
+
+#         # Early stopping check
+#         if avg_val_total_loss < best_val_loss:
+#             best_val_loss = avg_val_total_loss
+#             patience_count = 0
+
+#             # Save best model
+#             torch.save(model.state_dict(), f'{train_checkpoints_path}/best_model.pth')
+#         else:
+#             patience_count += 1
+
+#         if patience_count > patience:
+#             print(f'Ealry Stop')
+#             break
+
+#         lr = optimizer.param_groups[0]['lr']
+#         gradient_norm = calculate_gradient_norm(model)
+
+#         log_train_metrics_to_wandb(
+#             avg_train_class_loss=avg_train_class_loss,
+#             avg_train_router_loss=avg_train_router_loss,
+#             avg_train_total_loss=avg_train_total_loss,
+#             train_top1_acc=train_top1_acc,
+#             train_top5_acc = train_top5_acc,
+#             avg_val_classification_loss=avg_val_classification_loss,
+#             avg_val_router_loss=avg_val_router_loss,
+#             avg_val_total_loss=avg_val_total_loss,
+#             val_top1_acc=val_top1_acc,
+#             val_top5_acc = val_top5_acc,
+#             lr=lr,
+#             epoch=epoch,
+#             gradient_norm=gradient_norm,
+#             best_val_loss=best_val_loss,
+#             router_metrics = router_metrics
+#         )
+        
+#         # Save checkpoint at end of epoch
+#         save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
+#                        epoch + 1, 0, train_loss_history, val_loss_history)
+        
+#         # Reset batch counter for next epoch
+#         start_train_batch = 0
+#         torch.cuda.empty_cache()
+
+#         lr_scheduler.step()
+
+#     print('Training completed!')
+#     return model, train_loss_history, val_loss_history
 
 if __name__ == "__main__":
+
     train_datasets = []
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -843,7 +675,8 @@ if __name__ == "__main__":
 
     # Training metrics
     epochs = 250
-    pre_train_epochs = 150
+    back_bone_epochs = 50
+    pre_train_epochs = 100
     fine_tune_epochs = 100
     phase_multipliers = [1.0, 0.3]
     batch_size = 32
@@ -896,8 +729,31 @@ if __name__ == "__main__":
 
     print(f'--- Dataset loaded --- \n')
 
-    # Setup wandb for logging
-    logger = setup_wandb(
+    print('--- Loading router and model ---')
+    # Divides current dataset in patch for initialize keys and setting input channel for model
+    dataset_patch, _, _ = patch_extractor(train_dataset.data)  # Extract patches 
+    _, _, C, _, _ = dataset_patch.shape
+
+    # Initialize model, optimizer (Adam) and scheduler
+    # Loss initialize in training funcion (CrossEntropy)
+    PCE = PCENetwork(
+        inpt_channel= C,
+        num_experts = num_exp,
+        layer_number = layer_number,
+        patch_size = patch_size,
+        dropout=0.1,
+        num_classes=num_classes,
+        enable_router_metrics=True,
+        hard_threshold_router = False,
+    )
+    
+    print('-- model initialized -- \n')    
+    augmentation = DataAgumentation()
+
+    # Defines checkpointer and Logger
+    checkpointer = Checkpointer('./checkpoints')
+    logger = Logger()
+    logger.setup_wandb(
         project_name="PCE",
         num_exp=num_exp,
         kernel_size=kernel_size,
@@ -916,55 +772,30 @@ if __name__ == "__main__":
         current_dataset = 'Fake dataset'
     )
 
-
-    print('--- Loading router and model ---')
-    # Divides current dataset in patch for initialize keys and setting input channel for model
-    dataset_patch, _, _ = patch_extractor(train_dataset.data)  # Extract patches 
-    _, _, C, _, _ = dataset_patch.shape
+    # Extract checkpoints if exists
+    str_epoch, str_train_batch, train_loss_history, \
+    val_loss_history, optimizer, lr_scheduler = checkpointer.backbone_checkpoints(optimizer, lr_scheduler)
     
-    router = Router(num_experts=num_exp)
-    router.initialize_keys(dataset_patch) #Initialize router keys with SSP 
+    PCE = checkpointer.model_checkpoints(PCE)
 
-    # Initialize model, optimizer (Adam) and scheduler
-    # Loss initialize in training funcion (CrossEntropy)
-    model = PCENetwork(
-        inpt_channel= C,
-        num_experts = num_exp,
-        layer_number = layer_number,
-        patch_size = patch_size,
-        router=router,
-        dropout=0.1,
-        num_classes=num_classes,
-        enable_router_metrics=True,
-        hard_threshold_router = False,
-    )
-    print('-- Router and model initialized -- \n')
+    # Defines logger anc checkpointer callback
+    logger_cb = BackboneLoggerCallBack(logger, 5)
+    checkpointer_cb = BackboneCheckpointCallBack(checkpointer, 5)
+    backbone_lit_module = BackboneLitModule(PCE, 
+                                            optimizer, 
+                                            lr_scheduler, 
+                                            num_classes, 
+                                            str_epoch, 
+                                            str_train_batch,
+                                            train_loss_history, 
+                                            val_loss_history,
+                                            pre_train_epochs,
+                                            fine_tune_epochs,
+                                            phase_multipliers
+                                        )
 
-    print('--- Loading optimizer, scheduler, laugmentation class and metrics for accuracy ---')
-    optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-
-    lr_scheduler = PCEScheduler(
-        optimizer = optimizer, 
-        phase_epochs=[pre_train_epochs, fine_tune_epochs],
-        base_lr=lr,
-        phase_multipliers=phase_multipliers)
-    
-    augmentation = DataAgumentation()
-
-    metrics = setup_torchmetrics_accuracy(num_classes=num_classes, device=device)
-    print('--- All loaded --- \n')
-
-    print('--- Start with training ---')
-    training(
-        model=model,
-        train_loader=train_loader,
-        val_loader=validation_loader,
-        device=device,
-        epochs=epochs,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
-        augmentation = augmentation,
-        accuracy_metrics=metrics, 
-        class_names = class_names,
-        num_classes=num_classes, 
+    trainer = pl.Trainer(
+        max_epochs = back_bone_epochs,
+        logger = False,
+        callbacks = [logger_cb, checkpointer_cb]
     )

@@ -8,13 +8,15 @@ from einops import rearrange
 from Model.Components.ConvExpert import ConvExpert
 from Datasets_Classes.PatchExtractor import PatchExtractor
 
+from Model.Components.Router import Router
+
+
 class PCENetwork(nn.Module):
     def __init__(self, 
                     inpt_channel,
                     num_experts,
                     layer_number,
                     patch_size,
-                    router,
                     dropout,
                     num_classes,
                     hard_threshold_router = False,
@@ -37,7 +39,6 @@ class PCENetwork(nn.Module):
             threshold (float) -> Threshold for experts scores, used in router
         """
 
-        self.router = router
         self.num_classes = num_classes
         self.enable_router_metrics = enable_router_metrics
 
@@ -55,12 +56,45 @@ class PCENetwork(nn.Module):
         inpt_channel = inpt_channel # Start channel (3 or 2) + 4 of positional information
         out_channel = 8
 
+        proj_channel = self.create_layers(
+            inpt_channel=inpt_channel,
+            out_channel=out_channel,
+            num_experts=num_experts,
+            dropout=dropout,
+            layer_number=layer_number
+        )        
+
+        self.linear_layer = LazyLinear(self.num_classes)
+
+        self.router = Router(
+            num_experts=num_experts,
+            num_layers=layer_number,
+            proj_channel=proj_channel
+        )
+
+    def create_layers(self, inpt_channel, out_channel, num_experts, dropout, layer_number):
+        """
+        Create layers of PCE Network
+
+        Args:
+            inpt_channel (int) -> Input channel of the first layer
+            out_channel (int) -> Output channel of the first layer
+            num_experts (int) -> Number of experts in each layer
+            dropout (float) -> Dropout probability for experts
+            layer_number (int) -> Number of layers in the network
+        Returns:
+            proj_channel (list) -> List of output channels for projection convolution in each layer
+        """
+        proj_channel = []
+
         for l in range(layer_number):
+            proj_channel.append(inpt_channel)
+
             # Defines all convolution parts of the layer, including experts
             self.convs_proj.append(
                 nn.Conv2d(
                     in_channels = inpt_channel,
-                    out_channels = 8,
+                    out_channels = 128,
                     kernel_size=3,
                     padding=1,
                 )
@@ -71,6 +105,7 @@ class PCENetwork(nn.Module):
                     out_channel=out_channel,
                     dropout=dropout
                 )
+                for _ in range(num_experts)
             ])
             self.layers.append(experts)
 
@@ -88,12 +123,12 @@ class PCENetwork(nn.Module):
                 )
             )
 
-            if l % 2 == 0:
-                out_channel *= 2 
-
             inpt_channel = out_channel + 4   
 
-        self.linear_layer = LazyLinear(self.num_classes)
+            if l % 2 == 0:
+                out_channel *= 2 
+        
+        return proj_channel
     
     def get_exp_scores(self,
                        B,
