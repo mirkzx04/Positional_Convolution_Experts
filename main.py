@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.optim import Adam
+
+import pytorch_lightning as pl
 
 from DataAugmentation import DataAgumentation
 
@@ -22,7 +25,9 @@ from Model.PCE import PCENetwork
 
 from Training import Checkpointer
 from Training import Logger
-from Training.Backbone import BackboneCheckpointCallBack, BackboneLitModule, BackboneLoggerCallBack
+from Training.BackBone_Trainer import BackboneCheckpointCallBack, BackboneLitModule, BackboneLoggerCallBack
+
+from PCEScheduler import PCEScheduler
 
 def download_tiny_imagenet():
     """
@@ -222,431 +227,417 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
     return tiny_image_net_dic
 
 
-# def calc_cache_router_metrics(cache_data):
-#     """
-#     Calculate router metrics from cached data
+def calc_cache_router_metrics(cache_data):
+    """
+    Calculate router metrics from cached data
 
-#     Args:
-#         cahced_data (dict): Cached data from the router
+    Args:
+        cahced_data (dict): Cached data from the router
 
-#     Returns:
-#         dict: Calculated router metrics
-#     """
-#     all_cache_metrics = []
+    Returns:
+        dict: Calculated router metrics
+    """
+    all_cache_metrics = []
 
-#     if cache_data is not None:
-#         cache_metrics = {}
-#         for key, value in cache_data.items():
-#             if isinstance(value,torch.Tensor):
-#                 if value.dim() == 1:
-#                     cache_metrics[key] = value.mean().item()
-#                 else:
-#                     cache_metrics[f'cache_{key}_mean'] = value.mean().item()
-#                     cache_metrics[f'cache_{key}_std'] = value.std().item()  
-#                     cache_metrics[f'cache_{key}_max'] = value.max().item()
-#                     cache_metrics[f'cache_{key}_min'] = value.min().item()
+    if cache_data is not None:
+        cache_metrics = {}
+        for key, value in cache_data.items():
+            if isinstance(value,torch.Tensor):
+                if value.dim() == 1:
+                    cache_metrics[key] = value.mean().item()
+                else:
+                    cache_metrics[f'cache_{key}_mean'] = value.mean().item()
+                    cache_metrics[f'cache_{key}_std'] = value.std().item()  
+                    cache_metrics[f'cache_{key}_max'] = value.max().item()
+                    cache_metrics[f'cache_{key}_min'] = value.min().item()
 
-#                     if key == 'cosine_similarity':
-#                         cache_metrics[f'cache_{key}_range'] = (value.max() - value.min()).item()
+                    if key == 'cosine_similarity':
+                        cache_metrics[f'cache_{key}_range'] = (value.max() - value.min()).item()
 
-#                         sorted_sims = value.sort(dim=-1, descending=True)[0]
-#                         if sorted_sims.shape[-1] > 1:
-#                             top_gatp = (sorted_sims[:, 0] - sorted_sims[:, 1:]).mean().item()
-#                             cache_metrics[f'cache_top_gap'] = top_gatp
-#             else : 
-#                 cache_metrics[f'cache_{key}'] = value
-#         all_cache_metrics.append(cache_metrics)
+                        sorted_sims = value.sort(dim=-1, descending=True)[0]
+                        if sorted_sims.shape[-1] > 1:
+                            top_gatp = (sorted_sims[:, 0] - sorted_sims[:, 1:]).mean().item()
+                            cache_metrics[f'cache_top_gap'] = top_gatp
+            else : 
+                cache_metrics[f'cache_{key}'] = value
+        all_cache_metrics.append(cache_metrics)
 
-# def combine_router_metrics(all_cache_metrics, all_calc_metrics):
-#     """
-#     Combine all router metrics from cache and calculated metrics
+def combine_router_metrics(all_cache_metrics, all_calc_metrics):
+    """
+    Combine all router metrics from cache and calculated metrics
 
-#     Args:
-#         all_cache_metrics (list): List of cached router metrics
-#         all_calc_metrics (list): List of calculated router metrics
+    Args:
+        all_cache_metrics (list): List of cached router metrics
+        all_calc_metrics (list): List of calculated router metrics
 
-#     Returns:
-#         dict: Combined router metrics
-#     """
-#     combined_metrics = {}
+    Returns:
+        dict: Combined router metrics
+    """
+    combined_metrics = {}
 
-#     if all_cache_metrics:
-#         for key in all_cache_metrics[0].keys():
-#             combined_metrics[key] = sum(m[key] for m in all_cache_metrics) / len(all_cache_metrics)
+    if all_cache_metrics:
+        for key in all_cache_metrics[0].keys():
+            combined_metrics[key] = sum(m[key] for m in all_cache_metrics) / len(all_cache_metrics)
 
-#     if all_calc_metrics:
-#         all_keys = set()
-#         for m in all_cache_metrics:
-#             all_keys.update(m.keys())
-#         for key in all_keys:
-#             values = [m[key] for m in all_calc_metrics if key in m]
-#             if values:
-#                 combined_metrics[key] = sum(values) / len(values)
-#     return combined_metrics
+    if all_calc_metrics:
+        all_keys = set()
+        for m in all_cache_metrics:
+            all_keys.update(m.keys())
+        for key in all_keys:
+            values = [m[key] for m in all_calc_metrics if key in m]
+            if values:
+                combined_metrics[key] = sum(values) / len(values)
+    return combined_metrics
 
-# def train_backbone(model, train_loader, val_loader, device, epochs, optimizer, lr_scheduler, device):
-#     """
-#     Train the backbone model with the given parameters.
-
-#     Args:
-#         model (nn.Module): Backbone model to train.
-#         train_loader (DataLoader): DataLoader for training data.
-#         val_loader (DataLoader): DataLoader for validation data.
-#         device (torch.device): Device to run the training on.
-#         epochs (int): Number of epochs to train.
-#         optimizer (torch.optim.Optimizer): Optimizer for training.
-#         lr_scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
-#     """
-#     model.to(device)
-#     model.train()
-
-#     use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
-#     scaler = GradScaler("cuda") if use_amp else None   # indica il device
-#     autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
-
-#     criterion = nn.CrossEntropyLoss()
-
-#     for epoch in range(epochs):
-#         for batch_idx, (data, labels) in enumerate(train_loader):
-#             data, labels = data.to(device), labels.to(device)
-
-#             optimizer.zero_grad()
-#             outputs = model(data)
-#             loss = criterion(outputs, labels)
-            
-#             if use_amp:
-#                 scaler.scale(loss).backward()
-#                 scaler.unscale__(optimizer)
-#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-#                 scaler.step(optimizer)
-#                 scaler.update()
-#             else:
-#                 loss.backward()
-#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-#                 optimizer.step()
-
-#         lr_scheduler.step()
-
-# def training(
-#         model, 
-#         train_loader, 
-#         val_loader, 
-#         device,
-#         epochs,
-#         optimizer, 
-#         lr_scheduler,
-#         augmentation,
-#         accuracy_metrics,
-#         class_names,
-#         num_classes,
-#         train_checkpoints_path = './checkpoints'):
+def training(
+        model, 
+        train_loader, 
+        val_loader, 
+        device,
+        epochs,
+        optimizer, 
+        lr_scheduler,
+        augmentation,
+        accuracy_metrics,
+        class_names,
+        num_classes,
+        train_checkpoints_path = './checkpoints'):
     
-#     # Setting train and val loader
-#     train_loader = train_loader
-#     val_loader = val_loader 
+    # Setting train and val loader
+    train_loader = train_loader
+    val_loader = val_loader 
 
-#     # Set loss
-#     criterion = nn.CrossEntropyLoss()
+    # Set loss
+    criterion = nn.CrossEntropyLoss()
 
-#     # Get train params from the last train checkpoint (if exist)
-#     print('--- Check train checkpoints ---')
-#     start_epoch, start_train_batch, train_loss_history, \
-#     val_loss_history, optimizer, lr_scheduler = train_checkpoints(
-#                                                     train_checkpoints_path,
-#                                                     optimizer,
-#                                                     lr_scheduler)
-#     if start_epoch != 0:
-#         print(f'Resume training from epoch number : {start_epoch}')
-#     if start_train_batch != 0:
-#         print(f'Resume batches from batch_idx : {start_train_batch}')
-#     print('\n ------------------------ \n')
+    # Get train params from the last train checkpoint (if exist)
+    print('--- Check train checkpoints ---')
+    start_epoch, start_train_batch, train_loss_history, \
+    val_loss_history, optimizer, lr_scheduler = train_checkpoints(
+                                                    train_checkpoints_path,
+                                                    optimizer,
+                                                    lr_scheduler)
+    if start_epoch != 0:
+        print(f'Resume training from epoch number : {start_epoch}')
+    if start_train_batch != 0:
+        print(f'Resume batches from batch_idx : {start_train_batch}')
+    print('\n ------------------------ \n')
 
-#     # Get model from the last model checkpoint (if exist)
-#     print('--- Verify model checkpoints ---')
-#     model = model_checkpoints(train_checkpoints_path, model)
-#     model.to(device)
-#     print('\n ------------------------ \n')
+    # Get model from the last model checkpoint (if exist)
+    print('--- Verify model checkpoints ---')
+    model = model_checkpoints(train_checkpoints_path, model)
+    model.to(device)
+    print('\n ------------------------ \n')
 
-#     # Setting how often to do training, model and router logging
-#     save_checkpoint_every = 5
-#     log_prediction_every = 100
+    # Setting how often to do training, model and router logging
+    save_checkpoint_every = 5
+    log_prediction_every = 100
 
-#     # Print checkpoint and logging intervals
-#     print(f"Checkpoint will be saved every {save_checkpoint_every} batches.")
-#     print(f"Predictions will be logged every {log_prediction_every} batches.")
-#     print('\n ------------------------ \n')
+    # Print checkpoint and logging intervals
+    print(f"Checkpoint will be saved every {save_checkpoint_every} batches.")
+    print(f"Predictions will be logged every {log_prediction_every} batches.")
+    print('\n ------------------------ \n')
 
-#     # Setting early stop params
-#     best_val_loss = float('inf')
-#     patience_count = 0
-#     patience = 10
-#     print(f"Patience count starts at {patience_count}, patience is set to {patience}.")
-#     print('\n ------------------------ \n')
+    # Setting early stop params
+    best_val_loss = float('inf')
+    patience_count = 0
+    patience = 10
+    print(f"Patience count starts at {patience_count}, patience is set to {patience}.")
+    print('\n ------------------------ \n')
 
-#     # Setting mixed precision
-#     use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
-#     scaler = GradScaler("cuda") if use_amp else None   # indica il device
-#     autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
-#     print(f"Mixed precision enabled: {use_amp}")
-#     print('\n ------------------------ \n')
+    # Setting mixed precision
+    use_amp = torch.cuda.is_available() and str(device).startswith('cuda')
+    scaler = GradScaler("cuda") if use_amp else None   # indica il device
+    autocast_ctx = partial(autocast, "cuda") if use_amp else nullcontext
+    print(f"Mixed precision enabled: {use_amp}")
+    print('\n ------------------------ \n')
 
-#     # Start training
-#     print('--- Start training loop ---')
-#     for epoch in tqdm(range(start_epoch, epochs)):
-#         model.train()
+    # Start training
+    print('--- Start training loop ---')
+    for epoch in tqdm(range(start_epoch, epochs)):
+        model.train()
 
-#         epoch_train_loss = epoch_router_loss = epoch_total_loss = 0
-#         batch_count = 0
+        epoch_train_loss = epoch_router_loss = epoch_total_loss = 0
+        batch_count = 0
 
-#         # Reset accuracy metrics
-#         accuracy_metrics['top1_train'].reset()
-#         accuracy_metrics['top5_train'].reset()
+        # Reset accuracy metrics
+        accuracy_metrics['top1_train'].reset()
+        accuracy_metrics['top5_train'].reset()
 
-#         accuracy_metrics['top1_val'].reset()
-#         accuracy_metrics['top5_val'].reset()
+        accuracy_metrics['top1_val'].reset()
+        accuracy_metrics['top5_val'].reset()
 
-#         if epoch == 100:
-#             model.router.set_keys_trainable(True)
+        if epoch == 100:
+            model.router.set_keys_trainable(True)
         
-#         for batch_idx, (data, labels) in enumerate(tqdm(train_loader, desc='Training batches')):
-#             if epoch < start_epoch and batch_idx < start_train_batch:
-#                 continue
+        for batch_idx, (data, labels) in enumerate(tqdm(train_loader, desc='Training batches')):
+            if epoch < start_epoch and batch_idx < start_train_batch:
+                continue
 
-#             # Extract data and labels from batch
-#             data, labels = data.to(device), labels.to(device)
+            # Extract data and labels from batch
+            data, labels = data.to(device), labels.to(device)
 
-#             # transform data with data augmentation
-#             data = augmentation(data)
+            # transform data with data augmentation
+            data = augmentation(data)
 
-#             # Forward pass
-#             logits = model(data)
-#             classification_loss = criterion(logits, labels)
+            # Forward pass
+            logits = model(data)
+            classification_loss = criterion(logits, labels)
             
-#             # Calculate variance_loss and total loss
-#             router_loss = calc_router_loss(model)
-#             model.router.disable_metrics_cache()
-#             total_loss = classification_loss + router_loss
+            # Calculate variance_loss and total loss
+            router_loss = calc_router_loss(model)
+            model.router.disable_metrics_cache()
+            total_loss = classification_loss + router_loss
 
-#             # Backward pass
-#             optimizer.zero_grad()
-#             if use_amp:
-#                 scaler.scale(total_loss).backward()
-#                 # unscale before clipping
-#                 scaler.unscale_(optimizer)
-#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-#                 scaler.step(optimizer)
-#                 scaler.update()
-#             else:
-#                 total_loss.backward()
-#                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
-#                 optimizer.step()
+            # Backward pass
+            optimizer.zero_grad()
+            if use_amp:
+                scaler.scale(total_loss).backward()
+                # unscale before clipping
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                total_loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                optimizer.step()
 
-#             # # Track losses
-#             batch_class_loss = classification_loss.item()
-#             batch_router_loss = router_loss.item()
-#             batch_total_loss = total_loss.item()
+            # # Track losses
+            batch_class_loss = classification_loss.item()
+            batch_router_loss = router_loss.item()
+            batch_total_loss = total_loss.item()
 
-#             epoch_train_loss += batch_class_loss
-#             epoch_router_loss += batch_router_loss
-#             epoch_total_loss += batch_total_loss
-#             train_loss_history.append({
-#                 'epoch' : epoch,
-#                 'batch' : batch_idx,
-#                 'classification_loss' : batch_class_loss,
-#                 'router_loss' : batch_router_loss,
-#                 'total_loss' : batch_total_loss
-#             })
-#             batch_count += 1
+            epoch_train_loss += batch_class_loss
+            epoch_router_loss += batch_router_loss
+            epoch_total_loss += batch_total_loss
+            train_loss_history.append({
+                'epoch' : epoch,
+                'batch' : batch_idx,
+                'classification_loss' : batch_class_loss,
+                'router_loss' : batch_router_loss,
+                'total_loss' : batch_total_loss
+            })
+            batch_count += 1
 
-#             # Update torchmetrics for training (Top-1 and Top-5)
-#             accuracy_metrics['top1_train'].update(logits, labels)
-#             if num_classes >= 5:
-#                 accuracy_metrics['top5_train'].update(logits, labels)
+            # Update torchmetrics for training (Top-1 and Top-5)
+            accuracy_metrics['top1_train'].update(logits, labels)
+            if num_classes >= 5:
+                accuracy_metrics['top5_train'].update(logits, labels)
             
-#             # Update actual batch idx
-#             actual_batch_idx = batch_idx
+            # Update actual batch idx
+            actual_batch_idx = batch_idx
 
-#             # Save checkpoint
-#             if actual_batch_idx % save_checkpoint_every == 0:
-#                 save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, epoch, actual_batch_idx,
-#                                 train_loss_history, val_loss_history)
+            # Save checkpoint
+            if actual_batch_idx % save_checkpoint_every == 0:
+                save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler, epoch, actual_batch_idx,
+                                train_loss_history, val_loss_history)
 
-#             if actual_batch_idx % log_prediction_every == 0:
-#                 with torch.no_grad():
+            if actual_batch_idx % log_prediction_every == 0:
+                with torch.no_grad():
 
-#                     # Limit sample size
-#                     log_size = min(10, data.shape[0])
+                    # Limit sample size
+                    log_size = min(10, data.shape[0])
 
-#                     # transfer to CPU 
-#                     sample_data = data[:log_size].detach().cpu()
-#                     sample_labels = labels[:log_size].detach().cpu()
-#                     sample_logits = logits[:log_size].detach().cpu()
+                    # transfer to CPU 
+                    sample_data = data[:log_size].detach().cpu()
+                    sample_labels = labels[:log_size].detach().cpu()
+                    sample_logits = logits[:log_size].detach().cpu()
 
-#                     pred_probs = torch.softmax(sample_logits, dim=-1)
+                    pred_probs = torch.softmax(sample_logits, dim=-1)
 
-#                     log_prediction_to_wandb(
-#                         data_batch=sample_data,
-#                         true_labels=sample_labels,
-#                         pred_labels=pred_probs,
-#                         batch_class_loss = batch_class_loss,
-#                         batch_router_loss = batch_router_loss,
-#                         batch_total_loss = batch_total_loss,
-#                         class_names=class_names,
-#                         num_images_to_log=log_size,
-#                         epoch= epoch,
-#                         phase = 'train'
-#                     )
+                    log_prediction_to_wandb(
+                        data_batch=sample_data,
+                        true_labels=sample_labels,
+                        pred_labels=pred_probs,
+                        batch_class_loss = batch_class_loss,
+                        batch_router_loss = batch_router_loss,
+                        batch_total_loss = batch_total_loss,
+                        class_names=class_names,
+                        num_images_to_log=log_size,
+                        epoch= epoch,
+                        phase = 'train'
+                    )
 
-#             del data, classification_loss, router_loss, total_loss, logits
+            del data, classification_loss, router_loss, total_loss, logits
 
-#         # Calculate epoch metrics
-#         avg_train_class_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
-#         avg_train_router_loss = epoch_router_loss / batch_count if batch_count > 0 else 0
-#         avg_train_total_loss = epoch_total_loss / batch_count if batch_count > 0 else 0
+        # Calculate epoch metrics
+        avg_train_class_loss = epoch_train_loss / batch_count if batch_count > 0 else 0
+        avg_train_router_loss = epoch_router_loss / batch_count if batch_count > 0 else 0
+        avg_train_total_loss = epoch_total_loss / batch_count if batch_count > 0 else 0
         
-#         # Validation phase
-#         model.eval()
-#         val_class_loss = 0.0
-#         val_router_loss = 0.0
-#         val_total_loss = 0.0
-#         val_batches = 0
+        # Validation phase
+        model.eval()
+        val_class_loss = 0.0
+        val_router_loss = 0.0
+        val_total_loss = 0.0
+        val_batches = 0
         
-#         with torch.no_grad():
-#             for batch_idx, (data, labels) in enumerate(tqdm(val_loader, desc='Validation batches')):
-#                 data, labels = data.to(device), labels.to(device)
+        with torch.no_grad():
+            for batch_idx, (data, labels) in enumerate(tqdm(val_loader, desc='Validation batches')):
+                data, labels = data.to(device), labels.to(device)
                 
-#                 with autocast_ctx():
-#                     logits = model(data)
+                with autocast_ctx():
+                    logits = model(data)
                 
-#                 model.router.disable_metrics_cache()
-#                 classification_loss = criterion(logits, labels)
+                model.router.disable_metrics_cache()
+                classification_loss = criterion(logits, labels)
 
-#                 router_loss = calc_router_loss(model)
-#                 total_loss = classification_loss + router_loss
+                router_loss = calc_router_loss(model)
+                total_loss = classification_loss + router_loss
 
-#                 val_class_loss += classification_loss.item()
-#                 val_router_loss += router_loss.item()
-#                 val_total_loss += total_loss.item()
+                val_class_loss += classification_loss.item()
+                val_router_loss += router_loss.item()
+                val_total_loss += total_loss.item()
                 
-#                 val_batches += 1
+                val_batches += 1
 
-#                 accuracy_metrics['top1_val'].update(logits, labels)
-#                 if num_classes >= 5:
-#                     accuracy_metrics['top5_val'].update(logits, labels)
+                accuracy_metrics['top1_val'].update(logits, labels)
+                if num_classes >= 5:
+                    accuracy_metrics['top5_val'].update(logits, labels)
 
-#                 if batch_idx % log_prediction_every == 0:
-#                    with torch.no_grad():
+                if batch_idx % log_prediction_every == 0:
+                   with torch.no_grad():
 
-#                     # Limit sample size
-#                     log_size = min(10, data.shape[0])
+                    # Limit sample size
+                    log_size = min(10, data.shape[0])
 
-#                     # transfer to CPU 
-#                     sample_data = data[:log_size].detach().cpu()
-#                     sample_labels = labels[:log_size].detach().cpu()
-#                     sample_logits = logits[:log_size].detach().cpu()
+                    # transfer to CPU 
+                    sample_data = data[:log_size].detach().cpu()
+                    sample_labels = labels[:log_size].detach().cpu()
+                    sample_logits = logits[:log_size].detach().cpu()
 
-#                     pred_probs = torch.softmax(sample_logits, dim=-1)
+                    pred_probs = torch.softmax(sample_logits, dim=-1)
 
-#                     log_prediction_to_wandb(
-#                         data_batch=sample_data,
-#                         true_labels=sample_labels,
-#                         pred_labels=pred_probs,
-#                         batch_class_loss = val_class_loss,
-#                         batch_router_loss = val_router_loss,
-#                         batch_total_loss = val_total_loss,
-#                         class_names=class_names,
-#                         num_images_to_log=log_size,
-#                         epoch= epoch,
-#                         phase = 'validation'
-#                     )
+                    log_prediction_to_wandb(
+                        data_batch=sample_data,
+                        true_labels=sample_labels,
+                        pred_labels=pred_probs,
+                        batch_class_loss = val_class_loss,
+                        batch_router_loss = val_router_loss,
+                        batch_total_loss = val_total_loss,
+                        class_names=class_names,
+                        num_images_to_log=log_size,
+                        epoch= epoch,
+                        phase = 'validation'
+                    )
 
-#                 del data, labels, logits, classification_loss, router_loss, total_loss
+                del data, labels, logits, classification_loss, router_loss, total_loss
 
-#         # Calculate epoch metrics
-#         avg_val_classification_loss = val_class_loss / val_batches if val_batches > 0 else 0
-#         avg_val_router_loss = val_router_loss / val_batches if val_batches > 0 else 0
-#         avg_val_total_loss = val_total_loss / val_batches if val_batches > 0 else 0
+        # Calculate epoch metrics
+        avg_val_classification_loss = val_class_loss / val_batches if val_batches > 0 else 0
+        avg_val_router_loss = val_router_loss / val_batches if val_batches > 0 else 0
+        avg_val_total_loss = val_total_loss / val_batches if val_batches > 0 else 0
 
-#         val_loss_history.append(avg_val_total_loss)
+        val_loss_history.append(avg_val_total_loss)
 
-#         # Compute final accuracy metrics
-#         train_top1_acc = accuracy_metrics['top1_train'].compute().item() * 100
-#         train_top5_acc = accuracy_metrics['top5_train'].compute().item() * 100 if num_classes >= 5 else 0
+        # Compute final accuracy metrics
+        train_top1_acc = accuracy_metrics['top1_train'].compute().item() * 100
+        train_top5_acc = accuracy_metrics['top5_train'].compute().item() * 100 if num_classes >= 5 else 0
 
-#         val_top1_acc = accuracy_metrics['top1_val'].compute().item() * 100
-#         val_top5_acc = accuracy_metrics['top5_val'].compute().item() * 100 if num_classes >= 5 else 0
+        val_top1_acc = accuracy_metrics['top1_val'].compute().item() * 100
+        val_top5_acc = accuracy_metrics['top5_val'].compute().item() * 100 if num_classes >= 5 else 0
         
-#         # Calc router metrics every 5 epochs
-#         router_metrics = None
-#         with torch.no_grad():
-#             # Get samples per router metrics
-#             all_calc_metrics = []
-#             num_samples_batches = min(5, len(train_loader))
+        # Calc router metrics every 5 epochs
+        router_metrics = None
+        with torch.no_grad():
+            # Get samples per router metrics
+            all_calc_metrics = []
+            num_samples_batches = min(5, len(train_loader))
 
-#             for i, (data, _) in enumerate(train_loader):
-#                 if i >= num_samples_batches:
-#                     break
+            for i, (data, _) in enumerate(train_loader):
+                if i >= num_samples_batches:
+                    break
 
-#                 sample_data = data[:8].to(device)
-#                 with autocast_ctx():
-#                     _ = model(sample_data)
-#                 _, batch_router_metrcis = calc_router_loss(model, return_stats=True)
-#                 cache_data = model.router.get_cached_metrics()
-#                 all_calc_metrics.append(batch_router_metrcis)
+                sample_data = data[:8].to(device)
+                with autocast_ctx():
+                    _ = model(sample_data)
+                _, batch_router_metrcis = calc_router_loss(model, return_stats=True)
+                cache_data = model.router.get_cached_metrics()
+                all_calc_metrics.append(batch_router_metrcis)
 
-#                 # Process cache metrics
-#                 all_cache_metrics = calc_cache_router_metrics(cache_data)
+                # Process cache metrics
+                all_cache_metrics = calc_cache_router_metrics(cache_data)
 
-#         # Combine all metrics
-#         router_metrics = combine_router_metrics(all_cache_metrics, all_calc_metrics)
+        # Combine all metrics
+        router_metrics = combine_router_metrics(all_cache_metrics, all_calc_metrics)
 
-#         # Early stopping check
-#         if avg_val_total_loss < best_val_loss:
-#             best_val_loss = avg_val_total_loss
-#             patience_count = 0
+        # Early stopping check
+        if avg_val_total_loss < best_val_loss:
+            best_val_loss = avg_val_total_loss
+            patience_count = 0
 
-#             # Save best model
-#             torch.save(model.state_dict(), f'{train_checkpoints_path}/best_model.pth')
-#         else:
-#             patience_count += 1
+            # Save best model
+            torch.save(model.state_dict(), f'{train_checkpoints_path}/best_model.pth')
+        else:
+            patience_count += 1
 
-#         if patience_count > patience:
-#             print(f'Ealry Stop')
-#             break
+        if patience_count > patience:
+            print(f'Ealry Stop')
+            break
 
-#         lr = optimizer.param_groups[0]['lr']
-#         gradient_norm = calculate_gradient_norm(model)
+        lr = optimizer.param_groups[0]['lr']
+        gradient_norm = calculate_gradient_norm(model)
 
-#         log_train_metrics_to_wandb(
-#             avg_train_class_loss=avg_train_class_loss,
-#             avg_train_router_loss=avg_train_router_loss,
-#             avg_train_total_loss=avg_train_total_loss,
-#             train_top1_acc=train_top1_acc,
-#             train_top5_acc = train_top5_acc,
-#             avg_val_classification_loss=avg_val_classification_loss,
-#             avg_val_router_loss=avg_val_router_loss,
-#             avg_val_total_loss=avg_val_total_loss,
-#             val_top1_acc=val_top1_acc,
-#             val_top5_acc = val_top5_acc,
-#             lr=lr,
-#             epoch=epoch,
-#             gradient_norm=gradient_norm,
-#             best_val_loss=best_val_loss,
-#             router_metrics = router_metrics
-#         )
+        log_train_metrics_to_wandb(
+            avg_train_class_loss=avg_train_class_loss,
+            avg_train_router_loss=avg_train_router_loss,
+            avg_train_total_loss=avg_train_total_loss,
+            train_top1_acc=train_top1_acc,
+            train_top5_acc = train_top5_acc,
+            avg_val_classification_loss=avg_val_classification_loss,
+            avg_val_router_loss=avg_val_router_loss,
+            avg_val_total_loss=avg_val_total_loss,
+            val_top1_acc=val_top1_acc,
+            val_top5_acc = val_top5_acc,
+            lr=lr,
+            epoch=epoch,
+            gradient_norm=gradient_norm,
+            best_val_loss=best_val_loss,
+            router_metrics = router_metrics
+        )
         
-#         # Save checkpoint at end of epoch
-#         save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
-#                        epoch + 1, 0, train_loss_history, val_loss_history)
+        # Save checkpoint at end of epoch
+        save_checkpoint(train_checkpoints_path, model, optimizer, lr_scheduler,
+                       epoch + 1, 0, train_loss_history, val_loss_history)
         
-#         # Reset batch counter for next epoch
-#         start_train_batch = 0
-#         torch.cuda.empty_cache()
+        # Reset batch counter for next epoch
+        start_train_batch = 0
+        torch.cuda.empty_cache()
 
-#         lr_scheduler.step()
+        lr_scheduler.step()
 
-#     print('Training completed!')
-#     return model, train_loss_history, val_loss_history
+    print('Training completed!')
+    return model, train_loss_history, val_loss_history
+
+def training(logger, checkpointer, PCE, optimizer, lr_scheduler, num_classes, str_epoch, str_train_batch, 
+                   train_loss_history , val_loss_history, pre_train_epochs, fine_tune_epochs, phase_multipliers, weight_decay):
+    
+    if 0 <= str_epoch <= back_bone_epochs:
+        logger_cb = BackboneLoggerCallBack(logger = logger, backbone_epochs = back_bone_epochs, log_predicttion_every_batch = 5)
+        checkpointer_cb = BackboneCheckpointCallBack(checkpointer, 5)
+        backbone_lit_module = BackboneLitModule(PCE, 
+                                                optimizer, 
+                                                lr_scheduler, 
+                                                num_classes, 
+                                                str_epoch, 
+                                                str_train_batch,
+                                                train_loss_history, 
+                                                val_loss_history,
+                                                pre_train_epochs,
+                                                fine_tune_epochs,
+                                                phase_multipliers,
+                                                back_bone_epochs
+                                            )
+
+        trainer = pl.Trainer(
+            max_epochs = back_bone_epochs,
+            logger = False,
+            callbacks = [logger_cb, checkpointer_cb]
+        )
+    elif back_bone_epochs < str_epoch <= ema_only_epochs:
+
+    
 
 if __name__ == "__main__":
 
@@ -674,28 +665,29 @@ if __name__ == "__main__":
     hard_threshold_router = False
 
     # Training metrics
-    epochs = 250
     back_bone_epochs = 50
-    pre_train_epochs = 100
-    fine_tune_epochs = 100
+    ema_only_epochs = 100
+    differentiable_epochs = 100
+    total_epoch = back_bone_epochs + ema_only_epochs + differentiable_epochs
     phase_multipliers = [1.0, 0.3]
     batch_size = 32
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp}, k={kernel_size}, out_exp={out_channel_exp}, out_rout={out_channel_rout}, layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
     print(f"Router: ema={ema_alpha}, temp={router_temperature}, thresh={threshold}, hard={hard_threshold_router}")
-    print(f"Training: epochs={epochs} (pre={pre_train_epochs}, fine={fine_tune_epochs}), phases={phase_multipliers}, batch={batch_size}\n")
+    print(f"Training: epochs={total_epoch} (Backbone epochs={back_bone_epochs}, ema only epochs={ema_only_epochs}), differentiable epochs = {differentiable_epochs}  \
+        phases={phase_multipliers}, batch={batch_size}\n")
     print('\n ------------------------ \n')
 
-    train_config={
-        'epochs': epochs,
-        'pre_train_epochs': pre_train_epochs,
-        'fine_tune_epochs': fine_tune_epochs,
-        'epochs' : epochs,
-        'batch_size': batch_size,
-        'lr': lr,
-        'weight_decay': weight_decay,
-    }
+    # train_config={
+    #     'epochs': epochs,
+    #     'pre_train_epochs': pre_train_epochs,
+    #     'fine_tune_epochs': fine_tune_epochs,
+    #     'epochs' : epochs,
+    #     'batch_size': batch_size,
+    #     'lr': lr,
+    #     'weight_decay': weight_decay,
+    # }
 
     # Initialize patch extractor
     patch_extractor = PatchExtractor(patch_size=patch_size)
@@ -772,30 +764,49 @@ if __name__ == "__main__":
         current_dataset = 'Fake dataset'
     )
 
-    # Extract checkpoints if exists
-    str_epoch, str_train_batch, train_loss_history, \
-    val_loss_history, optimizer, lr_scheduler = checkpointer.backbone_checkpoints(optimizer, lr_scheduler)
+    str_epoch = checkpointer.get_start_epoch()
+
+    #Phase 1 :  Backbone training phase
+    if str_epoch == 0:
+        # Freeze router
+        for p in PCE.router.parameters() : p.requires_grad = False
+        optim_params = list(filter(lambda p : p.requires_grad, PCE.parameters()))
+
+        optimizer = Adam(optim_params, lr=lr, weight_decay=weight_decay)
+        lr_scheduler = PCEScheduler(
+            optimizer= optimizer,
+            phase_epochs=[back_bone_epochs + ema_only_epochs, differentiable_epochs],
+            base_lr=lr,
+            phase_multipliers=phase_multipliers
+        )
+    else:
+        str_epoch, str_train_batch, train_loss_history, \
+        val_loss_history, optimizer, lr_scheduler = checkpointer.train_checkpoints()
+
+    # Phase 2 : Unfreeze + add router params (keys undifferentiable)
+    if back_bone_epochs < str_epoch <= ema_only_epochs:
+        for p in PCE.router.parameters() : p.requires_grad = True
+        for key in PCE.router.keys: key.requires_grad = False
+
+        if str_epoch == back_bone_epochs + 1:
+            new_params = [p for p in PCE.router.parameters() if p.requires_grad]
+            optimizer.add_param_group(
+                {'params' : new_params}
+            )
+
+    # Phase 3 : full differentiable
+    if ema_only_epochs < str_epoch <= differentiable_epochs:
+        for key in PCE.router.keys: key.requires_grad = True
+
+        if str_epoch == ema_only_epochs + 1 :
+            new_params = [p for p in PCE.router.parameters() if p.requires_grad]
+            optimizer.add_param_group(
+                {'params' : new_params}
+            )
     
-    PCE = checkpointer.model_checkpoints(PCE)
-
-    # Defines logger anc checkpointer callback
-    logger_cb = BackboneLoggerCallBack(logger, 5)
-    checkpointer_cb = BackboneCheckpointCallBack(checkpointer, 5)
-    backbone_lit_module = BackboneLitModule(PCE, 
-                                            optimizer, 
-                                            lr_scheduler, 
-                                            num_classes, 
-                                            str_epoch, 
-                                            str_train_batch,
-                                            train_loss_history, 
-                                            val_loss_history,
-                                            pre_train_epochs,
-                                            fine_tune_epochs,
-                                            phase_multipliers
-                                        )
-
-    trainer = pl.Trainer(
-        max_epochs = back_bone_epochs,
-        logger = False,
-        callbacks = [logger_cb, checkpointer_cb]
-    )
+    str_epoch, str_train_batch, train_loss_history, \
+        val_loss_history, optimizer, lr_scheduler = checkpointer.train_checkpoints()
+    
+    training(logger, checkpointer, PCE, optimizer, lr_scheduler, num_classes, str_epoch, str_train_batch, 
+             train_loss_history, val_loss_history, total_epoch, back_bone_epochs, 
+             ema_only_epochs, differentiable_epochs, weight_decay)
