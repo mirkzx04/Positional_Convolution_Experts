@@ -23,9 +23,11 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 
 from Model.PCE import PCENetwork
 
-from Training import Checkpointer
+from Training import CheckpointCallBack, Checkpointer
 from Training import Logger
-from Training.BackBone_Trainer import BackboneCheckpointCallBack, BackboneLitModule, BackboneLoggerCallBack
+
+from Training.BackBone_Trainer import BackboneLitModule, BackboneLoggerCallBack
+from Training.EMA_Diff_Trainer import EMADiffLitModule, EMADiffLoggerCallBack
 
 from PCEScheduler import PCEScheduler
 
@@ -166,11 +168,13 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
     return tiny_image_net_dic
 
 def training(logger, checkpointer, PCE, optimizer, lr_scheduler, num_classes, str_epoch, str_train_batch, 
-                   train_loss_history , val_loss_history, pre_train_epochs, fine_tune_epochs, phase_multipliers, weight_decay):
+                   train_loss_history , val_loss_history, total_epoch, back_bone_epochs, 
+             ema_only_epochs, differentiable_epochs, phase_multipliers, weight_decay, augmentation):
     
+    checkpointer_cb = CheckpointCallBack(checkpointer, 5)
+
     if 0 <= str_epoch <= back_bone_epochs:
-        logger_cb = BackboneLoggerCallBack(logger = logger, backbone_epochs = back_bone_epochs, log_predicttion_every_batch = 5)
-        checkpointer_cb = BackboneCheckpointCallBack(checkpointer, 5)
+        logger_cb = BackboneLoggerCallBack(logger = logger, log_predicttion_every_batch = 5)
         backbone_lit_module = BackboneLitModule(PCE, 
                                                 optimizer, 
                                                 lr_scheduler, 
@@ -179,19 +183,42 @@ def training(logger, checkpointer, PCE, optimizer, lr_scheduler, num_classes, st
                                                 str_train_batch,
                                                 train_loss_history, 
                                                 val_loss_history,
-                                                pre_train_epochs,
-                                                fine_tune_epochs,
                                                 phase_multipliers,
-                                                back_bone_epochs
+                                                back_bone_epochs,
+                                                augmentation
                                             )
 
         trainer = pl.Trainer(
             max_epochs = back_bone_epochs,
             logger = False,
-            callbacks = [logger_cb, checkpointer_cb]
+            callbacks = [logger_cb, checkpointer_cb],
+            precision='16-mixed',
+            gradient_clip_val=0.5,
+            gradient_clip_algorithm='norm'
         )
-    elif back_bone_epochs < str_epoch <= ema_only_epochs:
-        pass
+
+    elif back_bone_epochs < str_epoch <= ema_only_epochs + differentiable_epochs:
+        logger_cb = EMADiffLoggerCallBack(logger = logger, log_predicttion_every_batch = 5)
+        lit_module = EMADiffLitModule(PCE, 
+            optimizer, 
+            lr_scheduler, 
+            num_classes, 
+            str_epoch, 
+            str_train_batch,
+            train_loss_history, 
+            val_loss_history,
+            phase_multipliers,
+            back_bone_epochs,
+            augmentation
+        )
+        trainer = pl.Trainer(
+            max_epochs=ema_only_epochs + differentiable_epochs,
+            logger = False,
+            callbacks=[logger_cb, checkpointer_cb],
+            precision='16-mixed',
+            gradient_clip_val=0.5,
+            gradient_clip_algorithm='norm'
+        )
 
 if __name__ == "__main__":
 
@@ -309,7 +336,7 @@ if __name__ == "__main__":
         patch_size=patch_size,
         lr=lr,
         batch_size=batch_size,
-        epochs=epochs,
+        epochs=total_epoch,
         dropout=dropout,
         ema_alpha=ema_alpha,
         weight_decay=weight_decay,
@@ -363,4 +390,4 @@ if __name__ == "__main__":
     
     training(logger, checkpointer, PCE, optimizer, lr_scheduler, num_classes, str_epoch, str_train_batch, 
              train_loss_history, val_loss_history, total_epoch, back_bone_epochs, 
-             ema_only_epochs, differentiable_epochs, weight_decay)
+             ema_only_epochs, differentiable_epochs, weight_decay, augmentation)

@@ -22,6 +22,7 @@ class EMADiffLitModule(pl.LightningModule):
                 fine_tune_epochs,
                 phase_multipliers,
                 backbone_epochs,
+                agumentation,
             ):
         
         """
@@ -66,6 +67,8 @@ class EMADiffLitModule(pl.LightningModule):
 
         self.best_val_loss = '-inf'
 
+        self.augmentation = agumentation
+
         self.accuracy_metrics = {
             'top1_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=1),
             'top5_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=5),
@@ -89,7 +92,8 @@ class EMADiffLitModule(pl.LightningModule):
         
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
-
+        data = self.augmentation(data)
+        
         logits = self(data)
         probabilities = F.softmax(logits, dim=1)
         predictions = torch.argmax(probabilities, dim=1)

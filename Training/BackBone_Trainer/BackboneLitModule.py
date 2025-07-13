@@ -18,10 +18,9 @@ class BackboneLitModule(pl.LightningModule):
                 start_train_batch,
                 train_loss_history,
                 val_loss_history,
-                pre_train_epochs,
-                fine_tune_epochs,
                 phase_multipliers,
                 backbone_epochs,
+                augmentation,
             ):
         
         """
@@ -47,12 +46,12 @@ class BackboneLitModule(pl.LightningModule):
         self.train_loss_history = train_loss_history
         self.val_loss_history = val_loss_history
         self.best_val_loss = '-inf'
-
-        self.pre_train = pre_train_epochs
-        self.fine_tune = fine_tune_epochs       
+ 
         self.lr_phase_multipliers = phase_multipliers
 
         self.backbone_epochs = backbone_epochs
+
+        self.augmentation = augmentation
 
         self.train_losses = []
         self.val_losses = []
@@ -126,6 +125,7 @@ class BackboneLitModule(pl.LightningModule):
         """
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
+        data = self.augmentation(data)
 
         logits = self(data)
         probabilities = F.softmax(logits, dim=1)

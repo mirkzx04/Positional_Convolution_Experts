@@ -10,7 +10,6 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 
 from Model.Components.Router import Router
 
-
 class PCENetwork(nn.Module):
     def __init__(self, 
                     inpt_channel,
@@ -130,33 +129,33 @@ class PCENetwork(nn.Module):
         
         return proj_channel
     
-    def get_exp_scores(self,
-                       B,
-                       P,
-                       C,
-                       pH,
-                       pW,
-                       X_patches,
-                       layer_idx):
+    def get_proj_patches(self, X, layer_idx):
+        X_patches, h_patches, w_patches = self.patch_extractor(X)
+        B, P, C, pH, pW = X_patches.shape
+
+        X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
+        X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
+
+        return X_patches_proj, X_patches_reshape, h_patches, w_patches, B, P
+
+    def initialize_router_keys(self, X):
+        for layer_idx, _ in enumerate(self.layers):
+            X_patches_proj, _, _, _, _, _ = self.get_proj_patches(X, layer_idx)
+
+            self.router.initialize_keys(X_patches_proj, layer_idx)
+
+    def get_exp_scores(self, X_patches_proj, layer_idx, B, P):
         """
         Get experts scores from router
 
         Args : 
-            B (int)-> Batch size
-            P // -> Patches number
-            C // -> Channel of feature map
-            pH //  -> Patch height
-            pW // -> Patch width
-            X_patches (torch.tensor) -> Feature map, tensor shape (B, P, C, nH, nW)
+            X_patches (torch.tensor) -> Feature map, tensor shape (B * P, C, nH, nW)
             layer_idx (int) -> index of current layer
 
         Returns:
             exp_scores -> tensor (B, P, num_experts)
             where num_experts is the number of experts in the layer
         """
-        # Reshape from (B,C,H,W) -> (BxC, H, W) and project pixel
-        X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
-        X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
 
         # Enable cache metric if rqeusted
         if self.enable_router_metrics:
@@ -194,22 +193,15 @@ class PCENetwork(nn.Module):
 
         for layer_idx, layer_experts in enumerate(self.layers):
             # Divides feature map / input img in patches
-            X_patches, h_patches, w_patches = self.patch_extractor(X)
-            B, P, C, pH, pW = X_patches.shape
 
+
+            X_patches_proj, X_patches_flat, h_patches, w_patches, B, P = self.get_proj_patches(X)
             # Take experts scores
             exp_scores = self.get_exp_scores(
-                B,
-                P,
-                C,
-                pH,
-                pW,
-                X_patches,
-                layer_idx
+                X_patches_proj, layer_idx, B, P
             )
 
             output = None
-            X_patches_flat = X_patches.reshape(B*P, C, pH, pW)
             for exp_idx, expert in enumerate(layer_experts):
                 # Get expert score
                 exp_score = exp_scores[:, :, exp_idx]
