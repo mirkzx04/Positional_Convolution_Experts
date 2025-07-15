@@ -167,58 +167,220 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
 
     return tiny_image_net_dic
 
-def training(logger, checkpointer, PCE, optimizer, lr_scheduler, num_classes, str_epoch, str_train_batch, 
-                   train_loss_history , val_loss_history, total_epoch, back_bone_epochs, 
-             ema_only_epochs, differentiable_epochs, phase_multipliers, weight_decay, augmentation):
+def get_trainable_params(PCE, phase):
+    """
+    Get trainable params of PCE networks 
+
+    Args : 
+        PCE : (nn.Module) is a models
+        phase (string) : string that rappresents current phase
+    """
+    if phase == 'backbone':
+        for p in PCE.router.parameters() : p.requires_grad = False
+        return list(filter(lambda p : p.requires_grad, PCE.parameters()))
+    elif phase == 'ema_only':
+        for p in PCE.router.parameters() : p.requires_grad = True
+        for key in PCE.router.keys : key.requires_grad = False
+        return [p for p in PCE.router.parameters() if p.requires_grad]
+    elif phase == 'deff':
+        for key in PCE.router.keys : key.requires_grad = True
+        return [p for p in PCE.router.parameters() if p.requires_grad]
+
+def load_checkpoints(
+        checkpointer, PCE, lr, weight_decay, phase_multipliers,
+        back_bone_epochs, ema_only_epochs, differentiable_epochs):
+    """
+    Get the last checkpoint if exist
+
+    Args:
+        checkpointer (Object): Manager of checkpoint.
+        PCE (nn.Module): The model to load the checkpoint into.
+        lr (float): Learning rate to use for optimizer.
+        weight_decay (float): Weight decay (L2 penalty) for optimizer.
+        phase_multipliers (list): Multipliers for different training phases.
+        back_bone_epochs (int): Number of epochs for backbone training phase.
+        ema_only_epochs (int): Number of epochs for EMA-only training phase.
+        differentiable_epochs (int): Number of epochs for differentiable training phase.
+    Returns:
+        The loaded checkpoint or None if no checkpoint exists.
+    """
+        
+    checkpoint = checkpointer.train_checkpoints()
+
+    if checkpoint is None:
+        phase = 'backbone'
+        str_train_batch = str_epoch = 0
+        val_loss_history = train_loss_history = []
+        optimizer = Adam(
+            params=get_trainable_params(PCE, phase),
+            lr=lr,
+            weight_decay=weight_decay
+        )
+        lr_scheduler = PCEScheduler(
+            optimizer=optimizer,
+            phase_epochs=[back_bone_epochs + ema_only_epochs, differentiable_epochs],
+            base_lr=lr,
+            phase_multipliers=phase_multipliers
+        )
+    else:
+        phase = checkpoint['phase']
+        str_epoch = checkpoint['start_epochs']
+        str_train_batch = checkpoint['train_batch']
+        train_loss_history = checkpoint['train_history']
+        val_loss_history = checkpoint['val_history']
+
+        optimizer = Adam(
+            params=get_trainable_params(PCE, phase),
+            lr=lr,
+            weight_decay=weight_decay
+        )
+        lr_scheduler = PCEScheduler(
+            optimizer=optimizer,
+            phase_epochs=[back_bone_epochs + ema_only_epochs, differentiable_epochs],
+            base_lr=lr,
+            phase_multipliers=phase_multipliers
+        )
+
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        lr_scheduler.load_state_dict(checkpoint['scheduler'])
     
-    checkpointer_cb = CheckpointCallBack(checkpointer, 5)
+    return phase, str_epoch, str_train_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler
 
-    if 0 <= str_epoch <= back_bone_epochs:
-        logger_cb = BackboneLoggerCallBack(logger = logger, log_predicttion_every_batch = 5)
-        backbone_lit_module = BackboneLitModule(PCE, 
-                                                optimizer, 
-                                                lr_scheduler, 
-                                                num_classes, 
-                                                str_epoch, 
-                                                str_train_batch,
-                                                train_loss_history, 
-                                                val_loss_history,
-                                                phase_multipliers,
-                                                back_bone_epochs,
-                                                augmentation
-                                            )
+def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
+             back_bone_epochs, ema_only_epochs, differentiable_epochs, 
+             lr, weight_decay, phase_multipliers, device, augmentation):
+    """
+    Training function
 
-        trainer = pl.Trainer(
-            max_epochs = back_bone_epochs,
-            logger = False,
-            callbacks = [logger_cb, checkpointer_cb],
-            precision='16-mixed',
-            gradient_clip_val=0.5,
-            gradient_clip_algorithm='norm'
-        )
+    Args:
+        logger (Logger): Logger object for experiment tracking.
+        checkpointer (Checkpointer): Object to manage checkpoints.
+        PCE (nn.Module): The model to be trained.
+        val_loader (DataLoader): DataLoader for validation data.
+        train_loader (DataLoader): DataLoader for training data.
+        train_set (Dataset): Training dataset.
+        back_bone_epochs (int): Number of epochs for backbone training phase.
+        ema_only_epochs (int): Number of epochs for EMA-only training phase.
+        differentiable_epochs (int): Number of epochs for differentiable training phase.
+        lr (float): Learning rate for optimizer.
+        weight_decay (float): Weight decay (L2 penalty) for optimizer.
+        phase_multipliers (list): Multipliers for different training phases.
+        device (str): Device to use for training ('cuda' or 'cpu').
+        augmentation (DataAgumentation): Data augmentation object.
+    """
 
-    elif back_bone_epochs < str_epoch <= ema_only_epochs + differentiable_epochs:
-        logger_cb = EMADiffLoggerCallBack(logger = logger, log_predicttion_every_batch = 5)
-        lit_module = EMADiffLitModule(PCE, 
-            optimizer, 
-            lr_scheduler, 
-            num_classes, 
-            str_epoch, 
-            str_train_batch,
-            train_loss_history, 
-            val_loss_history,
-            phase_multipliers,
-            back_bone_epochs,
-            augmentation
-        )
-        trainer = pl.Trainer(
-            max_epochs=ema_only_epochs + differentiable_epochs,
-            logger = False,
-            callbacks=[logger_cb, checkpointer_cb],
-            precision='16-mixed',
-            gradient_clip_val=0.5,
-            gradient_clip_algorithm='norm'
-        )
+    if isinstance(train_set, np.ndarray):
+        train_set = torch.tensor(train_set, dtype=torch.float32)
+    
+    phases = ['backbone', 'ema_only', 'diff']
+
+    # Get all checkpoints if exists
+    PCE = checkpointer.model_checkpoints(PCE)
+    str_phase, str_epoch, str_train_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler = \
+    load_checkpoints(checkpointer, PCE, lr, weight_decay, phase_multipliers,
+        back_bone_epochs, ema_only_epochs, differentiable_epochs)
+
+    idx_last_phase = idx_str_phase = phases.index(str_phase)
+
+    checkpointer_cb = CheckpointCallBack(checkpointer, 1)
+
+    # Phases training
+    for phase in range(idx_str_phase, len(phases)):
+        actual_phase = phases[phase]
+        idx_actual_phase = phases.index(actual_phase)
+
+        if idx_actual_phase > idx_last_phase:
+            new_optim_params = get_trainable_params(PCE, phase)
+            optimizer.add_param_group({'params' : new_optim_params})
+        
+        if actual_phase == 'backbone':
+            if str_epoch == 0:
+                # if str_epoch == 0 means that training is start of first time
+                print('-- START Training Backbone ---')
+                PCE.initialize_router_key(train_set)
+            else: 
+                print(f'--- RESUME Training backbone from {str_epoch} epoch')
+
+            logger_cb = BackboneLoggerCallBack(logger, 5)
+            lit_module = BackboneLitModule(
+                PCE,
+                lr_scheduler,
+                optimizer,
+                str_epoch,
+                str_train_batch,
+                train_loss_history,
+                val_loss_history,
+                augmentation,
+                lr,
+                weight_decay,
+                phase_multipliers,
+                actual_phase
+            )       
+            trainer = pl.Trainer(
+                max_epochs=back_bone_epochs,
+                logger = False,
+                callbacks=[logger_cb, checkpointer_cb],
+                precision='16-mixed',
+                gradient_clip_val=0.5,
+                gradient_clip_algorithm='norm',
+                accelerator=device
+            )
+        if actual_phase == 'ema_only':
+            logger_cb = EMADiffLitModule(logger, 5)
+            lit_module = EMADiffLitModule(
+                PCE,
+                lr_scheduler,
+                optimizer,
+                str_epoch,
+                str_train_batch,
+                train_loss_history,
+                val_loss_history,
+                augmentation,
+                phase_multipliers,
+                lr,
+                weight_decay,
+                actual_phase,
+                num_classes,
+            )
+            trainer = pl.Trainer(
+                max_epochs=ema_only_epochs,
+                logger = False,
+                callbacks=[logger_cb, checkpointer_cb],
+                precision='16-mixed',
+                gradient_clip_val=0.5,
+                gradient_clip_algorithm='norm',
+                accelerator=device
+            )
+        if actual_phase == 'diff':
+            logger_cb = EMADiffLitModule(logger, 5)
+            lit_module = EMADiffLitModule(
+                PCE,
+                lr_scheduler,
+                optimizer,
+                str_epoch,
+                str_train_batch,
+                train_loss_history,
+                val_loss_history,
+                augmentation,
+                phase_multipliers,
+                lr,
+                weight_decay,
+                actual_phase
+            )
+            trainer = pl.Trainer(
+                max_epochs=differentiable_epochs,
+                logger = False,
+                callbacks=[logger_cb, checkpointer_cb],
+                precision='16-mixed',
+                gradient_clip_val=0.5,
+                gradient_clip_algorithm='norm',
+                accelerator=device
+            )
+        
+        trainer.fit(lit_module, train_loader, val_loader)
+        if actual_phase != 'diff':
+            PCE.initialize_router_keys(train_set)
+        idx_last_phase = idx_actual_phase
 
 if __name__ == "__main__":
 
@@ -345,49 +507,7 @@ if __name__ == "__main__":
         current_dataset = 'Fake dataset'
     )
 
-    str_epoch = checkpointer.get_start_epoch()
-
-    #Phase 1 :  Backbone training phase
-    if str_epoch == 0:
-        # Freeze router
-        for p in PCE.router.parameters() : p.requires_grad = False
-        optim_params = list(filter(lambda p : p.requires_grad, PCE.parameters()))
-
-        optimizer = Adam(optim_params, lr=lr, weight_decay=weight_decay)
-        lr_scheduler = PCEScheduler(
-            optimizer= optimizer,
-            phase_epochs=[back_bone_epochs + ema_only_epochs, differentiable_epochs],
-            base_lr=lr,
-            phase_multipliers=phase_multipliers
-        )
-    else:
-        str_epoch, str_train_batch, train_loss_history, \
-        val_loss_history, optimizer, lr_scheduler = checkpointer.train_checkpoints()
-
-    # Phase 2 : Unfreeze + add router params (keys undifferentiable)
-    if back_bone_epochs < str_epoch <= ema_only_epochs:
-        for p in PCE.router.parameters() : p.requires_grad = True
-        for key in PCE.router.keys: key.requires_grad = False
-
-        if str_epoch == back_bone_epochs + 1:
-            new_params = [p for p in PCE.router.parameters() if p.requires_grad]
-            optimizer.add_param_group(
-                {'params' : new_params}
-            )
-
-    # Phase 3 : full differentiable
-    if ema_only_epochs < str_epoch <= differentiable_epochs:
-        for key in PCE.router.keys: key.requires_grad = True
-
-        if str_epoch == ema_only_epochs + 1 :
-            new_params = [p for p in PCE.router.parameters() if p.requires_grad]
-            optimizer.add_param_group(
-                {'params' : new_params}
-            )
-    
-    str_epoch, str_train_batch, train_loss_history, \
-        val_loss_history, optimizer, lr_scheduler = checkpointer.train_checkpoints()
-    
-    training(logger, checkpointer, PCE, optimizer, lr_scheduler, num_classes, str_epoch, str_train_batch, 
-             train_loss_history, val_loss_history, total_epoch, back_bone_epochs, 
-             ema_only_epochs, differentiable_epochs, weight_decay, augmentation)
+    training(
+        logger = logger,
+        checkpointer=checkpointer
+    )

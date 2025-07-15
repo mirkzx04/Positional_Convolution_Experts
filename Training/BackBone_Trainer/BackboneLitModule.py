@@ -10,17 +10,19 @@ from PCEScheduler import PCEScheduler
 
 class BackboneLitModule(pl.LightningModule):
     def __init__(self, 
-                model, 
-                optimizer, 
+                PCE,
                 lr_scheduler,
-                num_classes,
-                start_epoch,
-                start_train_batch,
+                optimizer,
+                str_epoch,
+                str_train_batch,
                 train_loss_history,
                 val_loss_history,
-                phase_multipliers,
-                backbone_epochs,
                 augmentation,
+                lr,
+                weight_decay,
+                phase_multipliers,
+                actual_phase,
+                num_classes,
             ):
         
         """
@@ -35,22 +37,23 @@ class BackboneLitModule(pl.LightningModule):
 
         super().__init__()
 
-        self.model = model
+        self.model = PCE
         self.num_classes = num_classes
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
 
-        self.start_epoch = start_epoch
-        self.start_train_batch = start_train_batch
+        self.start_epoch = str_epoch
+        self.start_train_batch = str_train_batch
 
         self.train_loss_history = train_loss_history
         self.val_loss_history = val_loss_history
         self.best_val_loss = '-inf'
  
         self.lr_phase_multipliers = phase_multipliers
-
-        self.backbone_epochs = backbone_epochs
-
+        self.lr = lr
+        self.weight_decay = weight_decay
+        
+        self.actual_phase = actual_phase
         self.augmentation = augmentation
 
         self.train_losses = []
@@ -102,7 +105,9 @@ class BackboneLitModule(pl.LightningModule):
         return {
             'pred_labels': predictions,
             'loss': loss,
-            'actual_batch' : batch_idx
+            'actual_batch' : batch_idx,
+            'train_loss_history' : self.train_loss_history,
+            'val_loss_history' : self.val_loss_history
         }
 
     def on_train_epoch_end(self, trainer):
@@ -114,6 +119,12 @@ class BackboneLitModule(pl.LightningModule):
         self.train_losses.clear()
 
         self.gradient_norm = self.calculate_gradient_norm(self.model)
+
+        return {
+            'train_loss_history' : self.train_loss_history,
+            'val_loss_history' : self.val_loss_history,
+            'actual_phase' : self.actual_phase
+        }
 
     def validation_step(self,trainer, batch, batch_idx):
         """
@@ -167,20 +178,7 @@ class BackboneLitModule(pl.LightningModule):
         }
 
     def configure_optimizers(self):
-        optimizer = Adam(self.parameters(), lr = self.lr, weight_decay=self.weight_decay)
-        lr_scheduler = PCEScheduler(
-            optimizer= optimizer,
-            phase_epochs=[self.pre_train, self.fine_tune],
-            base_lr=self.lr,
-            phase_multipliers=self.lr_phase_multipliers
-        )
-
-        if self.optimizer is not None:
-            optimizer.load_state_dict(self.optimizer)
-        if self.lr_scheduler is not None:
-            lr_scheduler.load_state_dict(self.lr_scheduler)
-
-        return {'optimizer' : optimizer, 'lr_scheduler' : lr_scheduler}
+        return self.optimizer, self.lr_scheduler
 
     def calculate_gradient_norm(model):
         """

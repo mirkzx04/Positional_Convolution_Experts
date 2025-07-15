@@ -28,25 +28,25 @@ class Checkpointer:
             print('Load training params from checkpoint...')
             checkpoint = torch.load(f'{self.check_point_dir}/train_checkpoints.pth')
 
-            start_epoch = checkpoint['start_epoch']
-            start_train_batch = checkpoint['train_batch']
+            # start_epoch = checkpoint['start_epoch']
+            # start_train_batch = checkpoint['train_batch']
 
-            train_loss_history = checkpoint['train_history']
-            val_loss_history = checkpoint['val_history']
+            # train_loss_history = checkpoint['train_history']
+            # val_loss_history = checkpoint['val_history']
 
-            optimizer = optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler = lr_scheduler.load_state_dict(checkpoint['scheduler'])
+            # optimizer = optimizer.load_state_dict(checkpoint['optimizer'])
+            # lr_scheduler = lr_scheduler.load_state_dict(checkpoint['scheduler'])
 
-            print(f'Resuming train from {start_epoch} epoch and {start_train_batch} train batch')
+            # print(f'Resuming train from {start_epoch} epoch and {start_train_batch} train batch')
             
-            return start_epoch, start_train_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler
+            return checkpoint
         else:
             print('No train checkpoint founded')
 
-        return 0, 0, [], [], None, None
+        return None
 
-    def save_backbone_checkpoint(self, model, optimizer, lr_scheduler, 
-                   epoch, batch_idx, train_loss_history, val_loss_history):
+    def save_checkpoints(self, model, optimizer, lr_scheduler, 
+                   epoch, batch_idx, train_loss_history, val_loss_history, actual_phase):
         """Save model and training state"""
 
         if not os.path.exists(self.check_point_dir):
@@ -62,16 +62,7 @@ class Checkpointer:
             'train_history': train_loss_history,
             'val_history': val_loss_history,
             'optimizer': optimizer.state_dict(),
-            'scheduler': lr_scheduler.state_dict()
+            'scheduler': lr_scheduler.state_dict(),
+            'phase' : actual_phase
         }, f'{self.check_point_dir}/backbone_checkpoints.pth')
     
-    def get_start_epoch(self):
-        if os.path.exists(f'{self.check_point_dir}/train_checkpoints.pth'):
-            print('Load training params from checkpoint...')
-            checkpoint = torch.load(f'{self.check_point_dir}/train_checkpoints.pth')
-
-            start_epoch = checkpoint['start_epoch']
-
-            return start_epoch
-        else:
-            return 0

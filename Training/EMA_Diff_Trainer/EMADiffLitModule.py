@@ -10,49 +10,61 @@ from PCEScheduler import PCEScheduler
 
 class EMADiffLitModule(pl.LightningModule):
     def __init__(self, 
-                model, 
-                optimizer, 
+                PCE,
                 lr_scheduler,
-                num_classes,
-                start_epoch,
-                start_train_batch,
+                optimizer,
+                str_epoch,
+                str_train_batch,
                 train_loss_history,
                 val_loss_history,
-                pre_train_epochs,
-                fine_tune_epochs,
+                augmentation,
                 phase_multipliers,
-                backbone_epochs,
-                agumentation,
+                lr,
+                weight_decay,
+                actual_phase,
+                num_classes
             ):
         
         """
-        Initialize the BackboneLitModule.
+        Initialize the EMADiffLitModule.
 
         Args:
-            model (torch.nn.Module): The backbone model to be trained.
-            optimizer (torch.optim.Optimizer): The optimizer for training.
-            lr_scheduler (torch.optim.lr_scheduler._LRScheduler): The learning rate scheduler.
-            num_classes (int): Number of classes for classification tasks.
+            PCE (nn.Module): The PCE network to be trained.
+            lr_scheduler: Learning rate scheduler.
+            optimizer: Optimizer for training.
+            str_epoch (int): Starting epoch (for resuming training).
+            str_train_batch (int): Starting training batch (for resuming training).
+            train_loss_history (list): List of training loss values.
+            val_loss_history (list): List of validation loss values.
+            augmentation: Data augmentation object.
+            phase_multipliers (list): Multipliers for different training phases.
+            lr (float): Learning rate.
+            weight_decay (float): Weight decay for optimizer.
+            actual_phase (str): Current training phase.
+            num_classes (int): Number of classes for classification.
+        Returns:
+            None
         """
 
         super().__init__()
 
-        self.model = model
+        self.model = PCE
         self.num_classes = num_classes
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
 
-        self.start_epoch = start_epoch
-        self.start_train_batch = start_train_batch
+        self.start_epoch = str_epoch
+        self.start_train_batch = str_train_batch
 
         self.train_loss_history = train_loss_history
         self.val_loss_history = val_loss_history
-
-        self.pre_train = pre_train_epochs
-        self.fine_tune = fine_tune_epochs       
+ 
         self.lr_phase_multipliers = phase_multipliers
+        self.lr = lr
+        self.weight_decay = weight_decay
 
-        self.backbone_epochs = backbone_epochs
+        self.augmentation = augmentation
+        self.current_phase = actual_phase
 
         self.train_loss_history = []
         self.val_loss_history = []
@@ -66,8 +78,6 @@ class EMADiffLitModule(pl.LightningModule):
         self.val_total_losses = []
 
         self.best_val_loss = '-inf'
-
-        self.augmentation = agumentation
 
         self.accuracy_metrics = {
             'top1_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=1),
@@ -84,9 +94,28 @@ class EMADiffLitModule(pl.LightningModule):
         self.criterion = torch.nn.CrossEntropyLoss()
 
     def forward(self, x):
+        """
+        Forward pass of the model.
+
+        Args:
+            x (Tensor): Input tensor.
+
+        Returns:
+            Tensor: Output logits from the model.
+        """
         return self.model(x)
     
     def training_step(self, batch, batch_idx):
+        """
+        Perform a single training step.
+
+        Args:
+            batch (tuple): Batch of data (inputs, labels).
+            batch_idx (int): Index of the batch.
+
+        Returns:
+            dict: Dictionary containing predictions, losses, and batch index.
+        """
         if self.current_epoch < self.start_epoch and batch_idx < self.start_train_batch:
             return None
         
@@ -122,6 +151,17 @@ class EMADiffLitModule(pl.LightningModule):
         }
     
     def on_train_epoch_end(self, outputs, batch, batch_idx):
+        """
+        Called at the end of the training epoch to compute and reset average losses.
+
+        Args:
+            outputs: Not used.
+            batch: Not used.
+            batch_idx: Not used.
+
+        Returns:
+            dict: Dictionary with training and validation loss histories and current phase.
+        """
         self.avg_train_class_losses = torch.tensor(self.train_class_losses).mean().item()
         self.avg_train_router_losses = torch.tensor(self.train_router_losses).mean().item()
         self.avg_train_total_losses = torch.tensor(self.train_total_losses).mean().item()
@@ -130,7 +170,23 @@ class EMADiffLitModule(pl.LightningModule):
         self.train_router_losses.clear()
         self.train_total_losses.clear()
 
-    def validation_step(self, batch, batch_idx):        
+        return {
+            'train_loss_history' : self.train_loss_history,
+            'val_loss_history' : self.val_loss_history,
+            'actual_phase' : self.actual_phase
+        }
+
+    def validation_step(self, batch, batch_idx):
+        """
+        Perform a single validation step.
+
+        Args:
+            batch (tuple): Batch of data (inputs, labels).
+            batch_idx (int): Index of the batch.
+
+        Returns:
+            dict: Dictionary containing predictions, losses, batch index, and loss histories.
+        """ 
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
 
@@ -159,9 +215,18 @@ class EMADiffLitModule(pl.LightningModule):
             'class_loss': class_loss,
             'router_loss': router_loss,
             'loss' : total_loss,
+            'actual_batch' : batch_idx,
+            'train_loss_history' : self.train_loss_history,
+            'val_loss_history' : self.val_loss_history
         }
 
     def on_validation_epoch_end(self):
+        """
+        Called at the end of the validation epoch to compute and reset average losses and metrics.
+
+        Returns:
+            dict: Dictionary with average losses, accuracies, epoch info, gradient norm, best validation loss, and router metrics.
+        """
         self.avg_val_class_losses = torch.tensor(self.val_class_losses).mean().item()
         self.avg_val_router_losses = torch.tensor(self.val_router_losses).mean().item()
         self.avg_val_total_losses = torch.tensor(self.val_total_losses).mean().item()
@@ -192,6 +257,9 @@ class EMADiffLitModule(pl.LightningModule):
             'router_metrics' : routing_metrics
         }
 
+    def configure_optimizers(self):
+        return self.optimizer, self.lr_scheduler
+
     def calculate_gradient_norm(self):
         """
         Calculate norm of gradient
@@ -213,6 +281,13 @@ class EMADiffLitModule(pl.LightningModule):
         return global_grad_norm
     
     def router_loss(self):
+        """
+        Compute the router loss, including confidence and anti-collapse losses.
+
+        Returns:
+            Tensor or tuple: Router loss tensor, and optionally router metrics and cache metrics if self.router_metrics is True.
+        """
+
         metrics = self.model.router.get_cahed_metrics()
         if metrics is None:
             return torch.tensor(0.0, requires_grad=True)
@@ -261,6 +336,15 @@ class EMADiffLitModule(pl.LightningModule):
         return total_loss
     
     def calc_cache_metrics(self, metrics):
+        """
+        Calculate statistics from cached router metrics.
+
+        Args:
+            metrics (dict): Dictionary of router metrics.
+
+        Returns:
+            dict: Dictionary of aggregated cache metrics.
+        """
         cache_metrics = {}
         all_cache_metrics = []
 
@@ -286,6 +370,16 @@ class EMADiffLitModule(pl.LightningModule):
         all_cache_metrics.append(cache_metrics)
 
     def combine_router_metrics(self, cache_metrics, router_metrics):
+        """
+        Combine cache and router metrics into a single dictionary.
+
+        Args:
+            cache_metrics (list): List of cache metrics dictionaries.
+            router_metrics (list): List of router metrics dictionaries.
+
+        Returns:
+            dict: Combined metrics dictionary.
+        """
         combined_metrics = {}
 
         if cache_metrics:
