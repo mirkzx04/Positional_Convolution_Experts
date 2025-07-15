@@ -42,6 +42,10 @@ class PCENetwork(nn.Module):
         self.enable_router_metrics = enable_router_metrics
 
         self.patch_extractor = PatchExtractor(patch_size)
+        self.router = Router(
+            num_experts=num_experts,
+            num_layers=layer_number,
+        )
 
         # Defines layers and your experts + final convolution of the layer 
         # Defines convolution for pixel projection for the SSP embeddigs, used in router
@@ -49,27 +53,22 @@ class PCENetwork(nn.Module):
         self.final_conv = nn.ModuleList()        
         self.convs_proj = nn.ModuleList()
         self.thresholds = nn.ParameterList()
+        self.patches_sizes = []
 
         self.hard_threshold_router = hard_threshold_router
 
         inpt_channel = inpt_channel # Start channel (3 or 2) + 4 of positional information
         out_channel = 8
 
-        proj_channel = self.create_layers(
+        self.create_layers(
             inpt_channel=inpt_channel,
             out_channel=out_channel,
             num_experts=num_experts,
             dropout=dropout,
-            layer_number=layer_number
+            layer_number=layer_number,
         )        
 
         self.linear_layer = LazyLinear(self.num_classes)
-
-        self.router = Router(
-            num_experts=num_experts,
-            num_layers=layer_number,
-            proj_channel=proj_channel
-        )
 
     def create_layers(self, inpt_channel, out_channel, num_experts, dropout, layer_number):
         """
@@ -82,18 +81,16 @@ class PCENetwork(nn.Module):
             dropout (float) -> Dropout probability for experts
             layer_number (int) -> Number of layers in the network
         Returns:
-            proj_channel (list) -> List of output channels for projection convolution in each layer
+            None
         """
-        proj_channel = []
-
+        patch_size = self.router.patch_size
         for l in range(layer_number):
-            proj_channel.append(inpt_channel)
-
+            
             # Defines all convolution parts of the layer, including experts
             self.convs_proj.append(
                 nn.Conv2d(
                     in_channels = inpt_channel,
-                    out_channels = 128,
+                    out_channels = 16,
                     kernel_size=3,
                     padding=1,
                 )
@@ -121,30 +118,53 @@ class PCENetwork(nn.Module):
                     torch.tensor(0.5, dtype=torch.float32, requires_grad=True)
                 )
             )
+            self.patches_sizes.append(patch_size)
+
+            patch_size = patch_size - 3 if patch_size - 3 >= 8 else patch_size
 
             inpt_channel = out_channel + 4   
 
             if l % 2 == 0:
                 out_channel *= 2 
-        
-        return proj_channel
     
-    def get_proj_patches(self, X, layer_idx):
+    # def get_proj_patches(self, X, layer_idx):
+    #     X_patches, h_patches, w_patches = self.patch_extractor(X)
+    #     B, P, C, pH, pW = X_patches.shape
+
+    #     X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
+    #     X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
+
+    #     return X_patches_proj, X_patches_reshape, h_patches, w_patches, B, P
+
+    # def initialize_router_keys(self, X):
+    #     for layer_idx, _ in enumerate(self.layers):
+    #         X_patches_proj, _, _, _, _, _ = self.get_proj_patches(X, layer_idx)
+
+    #         self.router.initialize_keys(X_patches_proj, layer_idx)
+
+    def initialize_keys(self, X):
+        for layer_idx in self.layers:
+            self.router.patch_size = self.patches_sizes[layer_idx]
+            _, X_patches_reshape, _, _ = self.get_patches(X)
+
+            X = X_patches_reshape
+
+    def get_patches(self, X, layer_idx):
+        """
+        Get patches and patches information
+
+        Args:
+            X (torch.Tensor) : Tensor of shape [B, C, H, W]
+        """
+        self.router.patch_size = self.patches_sizes[layer_idx]
         X_patches, h_patches, w_patches = self.patch_extractor(X)
         B, P, C, pH, pW = X_patches.shape
 
         X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
-        X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
 
-        return X_patches_proj, X_patches_reshape, h_patches, w_patches, B, P
+        return X_patches, X_patches_reshape, h_patches, w_patches
 
-    def initialize_router_keys(self, X):
-        for layer_idx, _ in enumerate(self.layers):
-            X_patches_proj, _, _, _, _, _ = self.get_proj_patches(X, layer_idx)
-
-            self.router.initialize_keys(X_patches_proj, layer_idx)
-
-    def get_exp_scores(self, X_patches_proj, layer_idx, B, P):
+    def get_exp_scores(self, X_patches_reshape, layer_idx, B, P):
         """
         Get experts scores from router
 
@@ -157,6 +177,7 @@ class PCENetwork(nn.Module):
             where num_experts is the number of experts in the layer
         """
 
+        X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
         # Enable cache metric if rqeusted
         if self.enable_router_metrics:
             self.router.enable_metrics_cache()
@@ -193,12 +214,12 @@ class PCENetwork(nn.Module):
 
         for layer_idx, layer_experts in enumerate(self.layers):
             # Divides feature map / input img in patches
+            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, layer_idx)
+            B, P, _, _, _ = X_patches.shape
 
-
-            X_patches_proj, X_patches_flat, h_patches, w_patches, B, P = self.get_proj_patches(X)
             # Take experts scores
             exp_scores = self.get_exp_scores(
-                X_patches_proj, layer_idx, B, P
+                X_patches_reshape, layer_idx, B, P
             )
 
             output = None
@@ -208,7 +229,7 @@ class PCENetwork(nn.Module):
 
                 # Applies expert at patch, reshape dimension
 
-                out = expert(X_patches_flat)
+                out = expert(X_patches_reshape)
                 _, C_out, H_out, W_out = out.shape
                 out = out.reshape(B,P, C_out, H_out, W_out)
 

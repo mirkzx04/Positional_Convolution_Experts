@@ -10,7 +10,7 @@ from torch import nn
 from .SSP import SSP
 
 class Router(nn.Module):
-    def __init__(self,num_experts, num_layers, proj_channel, ema_alpha=0.9):
+    def __init__(self,num_experts, num_layers, ema_alpha=0.9):
         super().__init__()
         """
         Router constructor
@@ -34,7 +34,7 @@ class Router(nn.Module):
 
         # Create keys
         self.keys = nn.ParameterList([
-            nn.Parameter(torch.randn(num_experts, proj_channel[idx]), requires_grad=False)
+            nn.Parameter(torch.randn(num_experts, 336), requires_grad=False)
             for idx in range(num_layers)
         ])
 
