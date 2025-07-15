@@ -126,21 +126,6 @@ class PCENetwork(nn.Module):
 
             if l % 2 == 0:
                 out_channel *= 2 
-    
-    # def get_proj_patches(self, X, layer_idx):
-    #     X_patches, h_patches, w_patches = self.patch_extractor(X)
-    #     B, P, C, pH, pW = X_patches.shape
-
-    #     X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
-    #     X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
-
-    #     return X_patches_proj, X_patches_reshape, h_patches, w_patches, B, P
-
-    # def initialize_router_keys(self, X):
-    #     for layer_idx, _ in enumerate(self.layers):
-    #         X_patches_proj, _, _, _, _, _ = self.get_proj_patches(X, layer_idx)
-
-    #         self.router.initialize_keys(X_patches_proj, layer_idx)
 
     def initialize_keys(self, X):
         for layer_idx in self.layers:
