@@ -23,11 +23,15 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 
 from Model.PCE import PCENetwork
 
-from Training import CheckpointCallBack, Checkpointer
-from Training import Logger
+from Training.Checkpointer import Checkpointer
+from Training.Logger import Logger
+from Training.CheckpointCallBack import CheckpointCallBack
 
-from Training.BackBone_Trainer import BackboneLitModule, BackboneLoggerCallBack
-from Training.EMA_Diff_Trainer import EMADiffLitModule, EMADiffLoggerCallBack
+from Training.BackBone_Trainer.BackboneLitModule import BackboneLitModule
+from Training.BackBone_Trainer.BackboneLoggerCallBack import BackboneLoggerCallBack
+
+from Training.EMA_Diff_Trainer.EMADiffLitModule import EMADiffLitModule
+from Training.EMA_Diff_Trainer.EMADiffLoggerCallBack import EMADiffLoggerCallBack
 
 from PCEScheduler import PCEScheduler
 
@@ -294,12 +298,12 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
             optimizer.add_param_group({'params' : new_optim_params})
         
         if actual_phase == 'backbone':
-            if str_epoch == 0:
-                # if str_epoch == 0 means that training is start of first time
-                print('-- START Training Backbone ---')
-                PCE.initialize_router_key(train_set)
-            else: 
-                print(f'--- RESUME Training backbone from {str_epoch} epoch')
+            # if str_epoch == 0:
+            #     # if str_epoch == 0 means that training is start of first time
+            #     print('-- START Training Backbone ---')
+            #     PCE.initialize_router_key(train_set)
+            # else: 
+            #     print(f'--- RESUME Training backbone from {str_epoch} epoch')
 
             logger_cb = BackboneLoggerCallBack(logger, 5)
             lit_module = BackboneLitModule(
@@ -314,7 +318,8 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 lr,
                 weight_decay,
                 phase_multipliers,
-                actual_phase
+                actual_phase,
+                num_classes
             )       
             trainer = pl.Trainer(
                 max_epochs=back_bone_epochs,
@@ -341,6 +346,7 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 weight_decay,
                 actual_phase,
                 num_classes,
+                num_classes
             )
             trainer = pl.Trainer(
                 max_epochs=ema_only_epochs,
@@ -365,7 +371,8 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 phase_multipliers,
                 lr,
                 weight_decay,
-                actual_phase
+                actual_phase,
+                num_classes
             )
             trainer = pl.Trainer(
                 max_epochs=differentiable_epochs,
@@ -509,5 +516,17 @@ if __name__ == "__main__":
 
     training(
         logger = logger,
-        checkpointer=checkpointer
+        checkpointer=checkpointer,
+        PCE=PCE,
+        val_loader=validation_loader,
+        train_loader=train_loader,
+        train_set=train_dataset,
+        back_bone_epochs=back_bone_epochs,
+        ema_only_epochs=ema_only_epochs,
+        differentiable_epochs=differentiable_epochs,
+        lr=lr,
+        weight_decay=weight_decay,
+        phase_multipliers=phase_multipliers,
+        device=device,
+        augmentation=augmentation
     )

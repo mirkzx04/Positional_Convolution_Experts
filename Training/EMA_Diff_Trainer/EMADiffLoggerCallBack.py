@@ -50,7 +50,7 @@ class EMADiffLoggerCallBack(pl.Callback):
                 phase='train_backbone'
             ) 
     
-    def on_validation_epoch_end(self, trainer, pl_module):
+    def on_validation_epoch_end(self, trainer, pl_module, output):
 
         avg_train_class_loss = getattr(pl_module, 'avg_train_class_loss', None)
         avg_train_router_loss = getattr(pl_module, 'avg_train_router_loss', None)
@@ -66,7 +66,7 @@ class EMADiffLoggerCallBack(pl.Callback):
         epoch = trainer.current_epoch
         gradient_norm = getattr(pl_module, "gradient_norm", None)
         best_val_loss = getattr(pl_module, "best_val_loss", None)
-        router_metrics = getattr(pl_module, 'router_metrics', None)
+        router_metrics = output['router_metrics']
 
         self.logger.log_train_metrics_to_wandb(
             avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,

@@ -1,6 +1,6 @@
 import pytorch_lightning as pl
 
-class BackBoneLoggerCallBack(pl.Callback):
+class BackboneLoggerCallBack(pl.Callback):
     def __init__(self, logger, log_predicttion_every_batch=1):
         super().__init__()
         self.logger = logger
@@ -33,18 +33,12 @@ class BackBoneLoggerCallBack(pl.Callback):
             data_batch, true_labels = batch
             
             pred_labels = output['pred_labels'] if isinstance(output, dict) and 'pred_labels' in output else None
-            batch_class_loss = output['class_loss'] if isinstance(output, dict) and 'class_loss' in output else None
-            batch_router_loss = output['router_loss'] if isinstance(output, dict) and 'router_loss' in output else None
-            batch_total_loss = output['total_loss'] if isinstance(output, dict) and 'total_loss' in output else None
 
-            self.logger.log_backbone_metrics_to_wandb(
+            self.logger.log_prediction_to_wandb(
                 data_batch, 
                 true_labels, 
                 pred_labels, 
-                batch_class_loss, 
-                batch_router_loss, 
-                batch_total_loss,
-                class_names=pl_module.class_names if hasattr(pl_module, 'class_names') else None,
+                class_names=pl_module.class_names,
                 num_images_to_log=10,
                 epoch=trainer.current_epoch,
                 phase='train_backbone'

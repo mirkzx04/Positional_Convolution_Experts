@@ -216,8 +216,6 @@ class EMADiffLitModule(pl.LightningModule):
             'router_loss': router_loss,
             'loss' : total_loss,
             'actual_batch' : batch_idx,
-            'train_loss_history' : self.train_loss_history,
-            'val_loss_history' : self.val_loss_history
         }
 
     def on_validation_epoch_end(self):
@@ -241,19 +239,6 @@ class EMADiffLitModule(pl.LightningModule):
             self.best_val_loss = self.avg_val_total_losses
 
         return {
-            'avg_train_class_loss' : self.avg_train_class_losses,
-            'avg_train_router_loss' : self.avg_train_router_losses,
-            'avg_train_total_loss' : self.train_total_losses,
-            'train_top1_acc' : self.accuracy_metrics['top1_train'].compute().item(),
-            'train_top5_acc' : self.accuracy_metrics['top5_train'].compute().item(),
-            'avg_val_classification_loss' : self.avg_val_class_losses,
-            'avg_val_router_loss' : self.avg_val_router_losses,
-            'avg_val_total_loss' : self.avg_val_total_losses,
-            'val_top1_acc' : self.accuracy_metrics['top1_val'].compute().item(),
-            'val_top5_acc' : self.accuracy_metrics['top5_val'].compute().item(),
-            'epoch' : self.current_epoch,
-            'gradient_norm' : self.calculate_gradient_norm(),
-            'best_val_loss' : self.best_val_loss,
             'router_metrics' : routing_metrics
         }
 

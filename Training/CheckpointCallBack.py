@@ -1,6 +1,6 @@
 import pytorch_lightning as pl
 
-class BackboneCheckpointCallBack(pl.Callback):
+class CheckpointCallBack(pl.Callback):
     def __init__(self, checkpointer, save_checkpoint_every=5):
         super().__init__()
         self.checkpointer = checkpointer
