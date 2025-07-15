@@ -144,10 +144,19 @@ class PCENetwork(nn.Module):
 
     def initialize_keys(self, X):
         for layer_idx in self.layers:
+            # Get specific patch_size of layers and Patches
             self.router.patch_size = self.patches_sizes[layer_idx]
-            _, X_patches_reshape, _, _ = self.get_patches(X)
+            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X)
 
-            X = X_patches_reshape
+            proj_patch = self.convs_proj[layer_idx](X_patches_reshape)
+            self.router.initialize_keys(proj_patch)
+
+            X = rearrange(
+                X_patches,
+                'b (h w) c ph pw -> b c (h ph) (w pw)',
+                h = h_patches,
+                w = w_patches
+            )
 
     def get_patches(self, X, layer_idx):
         """
