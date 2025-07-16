@@ -70,7 +70,7 @@ class DataAgumentation:
 
         # Create theta matric [H, W]
         theta = torch.tensor([[cos_a, -sin_a, 0],
-                              [sin_a, cos_a, 0]], dtype=torch.float32).unsqueeze(0)
+                              [sin_a, cos_a, 0]], dtype=torch.float32, device=image.device).unsqueeze(0)
 
         # Create grill and applied transform
         grid = F.affine_grid(theta, image.unsqueeze(0).shape, align_corners=False)

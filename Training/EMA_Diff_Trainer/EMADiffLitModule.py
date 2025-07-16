@@ -150,7 +150,7 @@ class EMADiffLitModule(pl.LightningModule):
             'actual_batch' : batch_idx
         }
     
-    def on_train_epoch_end(self, outputs, batch, batch_idx):
+    def on_train_epoch_end(self):
         """
         Called at the end of the training epoch to compute and reset average losses.
 
@@ -243,7 +243,7 @@ class EMADiffLitModule(pl.LightningModule):
         }
 
     def configure_optimizers(self):
-        return self.optimizer, self.lr_scheduler
+        return [self.optimizer], [self.lr_scheduler]
 
     def calculate_gradient_norm(self):
         """

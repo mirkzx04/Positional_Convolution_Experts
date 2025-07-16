@@ -128,13 +128,31 @@ class PCENetwork(nn.Module):
                 out_channel *= 2 
 
     def initialize_keys(self, X):
+        """
+        Initialize router keys with projection convolution
+
+        Args:
+            X (torch.Tensor) : Training set 
+        """
         for layer_idx in self.layers:
-            # Get specific patch_size of layers and Patches
+            # Get patches
             X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X)
+
+            # Check if X_patches_reshape has same channels as conv_proj
+            expected_in_channels = self.convs_proj[layer_idx].in_channels
+            current_channels = X_patches_reshape.shape[1]
+            if current_channels < expected_in_channels:
+                diff = expected_in_channels - current_channels
+                pad = torch.zeros(X_patches_reshape.size(0), diff, X_patches_reshape.size(2), X_patches_reshape.size(3),
+                                  device=X_patches_reshape.device, dtype=X_patches_reshape.dtype)
+                X_patches_reshape = torch.cat([X_patches_reshape, pad], dim = 1)
+            elif current_channels > expected_in_channels:
+                X_patches_reshape = X_patches_reshape[:, :expected_in_channels, :, :]
 
             proj_patch = self.convs_proj[layer_idx](X_patches_reshape)
             self.router.initialize_keys(proj_patch)
 
+            # Recompose the patches into the original image
             X = rearrange(
                 X_patches,
                 'b (h w) c ph pw -> b c (h ph) (w pw)',

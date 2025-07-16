@@ -126,7 +126,7 @@ class BackboneLitModule(pl.LightningModule):
             'actual_phase' : self.actual_phase
         }
 
-    def validation_step(self,trainer, batch, batch_idx):
+    def validation_step(self, batch, batch_idx):
         """
         Perform a single validation step.
 
@@ -156,7 +156,7 @@ class BackboneLitModule(pl.LightningModule):
             'loss': loss,
         }
 
-    def on_validation_epoch_end(self, trainer):
+    def on_validation_epoch_end(self):
         """
         Called at the end of each validation epoch.
         """
@@ -178,7 +178,7 @@ class BackboneLitModule(pl.LightningModule):
         }
 
     def configure_optimizers(self):
-        return self.optimizer, self.lr_scheduler
+        return [self.optimizer], [self.lr_scheduler]
 
     def calculate_gradient_norm(model):
         """
