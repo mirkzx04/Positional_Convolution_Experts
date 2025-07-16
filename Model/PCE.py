@@ -83,7 +83,7 @@ class PCENetwork(nn.Module):
         Returns:
             None
         """
-        patch_size = self.router.patch_size
+        patch_size = self.patch_extractor.patch_size
         for l in range(layer_number):
             
             # Defines all convolution parts of the layer, including experts
@@ -130,7 +130,6 @@ class PCENetwork(nn.Module):
     def initialize_keys(self, X):
         for layer_idx in self.layers:
             # Get specific patch_size of layers and Patches
-            self.router.patch_size = self.patches_sizes[layer_idx]
             X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X)
 
             proj_patch = self.convs_proj[layer_idx](X_patches_reshape)
@@ -150,7 +149,7 @@ class PCENetwork(nn.Module):
         Args:
             X (torch.Tensor) : Tensor of shape [B, C, H, W]
         """
-        self.router.patch_size = self.patches_sizes[layer_idx]
+        self.patch_extractor.patch_size = self.patches_sizes[layer_idx]
         X_patches, h_patches, w_patches = self.patch_extractor(X)
         B, P, C, pH, pW = X_patches.shape
 
