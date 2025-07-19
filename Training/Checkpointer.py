@@ -45,8 +45,16 @@ class Checkpointer:
 
         return None
 
-    def save_checkpoints(self, model, optimizer, lr_scheduler, 
-                   epoch, batch_idx, train_loss_history, val_loss_history, actual_phase):
+    def save_checkpoints(self, 
+                        model, 
+                        optimizer, 
+                        lr_scheduler, 
+                        epoch, 
+                        str_batch_idx, 
+                        str_val_batch,
+                        train_loss_history, 
+                        val_loss_history, 
+                        actual_phase):
         """Save model and training state"""
 
         if not os.path.exists(self.check_point_dir):
@@ -58,7 +66,8 @@ class Checkpointer:
         # Save training state
         torch.save({
             'start_epoch': epoch,
-            'train_batch': batch_idx,
+            'train_batch': str_batch_idx,
+            'val_batch' : str_val_batch,
             'train_history': train_loss_history,
             'val_history': val_loss_history,
             'optimizer': optimizer.state_dict(),

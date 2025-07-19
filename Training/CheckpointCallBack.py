@@ -75,8 +75,8 @@ class CheckpointCallBack(pl.Callback):
 
 
         self.checkpointer.save_checkpoints(
-            pl_module.model, optimizer, lr_scheduler, trainer.current_epoch, 0, train_loss_history, train_val_history, actual_phase 
-        )
+            pl_module.model, optimizer, lr_scheduler, trainer.current_epoch, 0,0,
+            train_loss_history, train_val_history, actual_phase)
 
 
         
