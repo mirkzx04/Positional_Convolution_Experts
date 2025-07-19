@@ -55,7 +55,7 @@ class Logger:
 
         self.logger = wb.config
     
-    def log_prediction_to_wandb(data_batch, 
+    def log_prediction_to_wandb(self, data_batch, 
                             true_labels,
                             pred_labels, 
                             class_names = None, 
@@ -110,9 +110,7 @@ class Logger:
             pred_class = class_names[pred_label] if pred_label < len(class_names) else f'Predicted classes : {pred_label}'
 
             is_correct = "✓" if true_label == pred_label else "✗"
-            caption = f'{is_correct} True : {true_class} | Pred : {pred_class} \n \
-                        loss metrics : batch classification loss : {batch_class_loss} ||  \
-                        batch router loss : {batch_router_loss} || batch total loss : {batch_total_loss}'
+            caption = f'{is_correct} True : {true_class} | Pred : {pred_class} \n'
 
             # Create wandb image object
             wandb_img = wb.Image(
@@ -126,7 +124,7 @@ class Logger:
         log_dict = {f'{phase}_predictions' : wandb_images}
         wb.log(log_dict, step = epoch)
     
-    def log_backbone_metrics_to_wandb(avg_train_loss, avg_val_loss,
+    def log_backbone_metrics_to_wandb(self, avg_train_loss, avg_val_loss,
                                       train_top1_acc, train_top5_acc,
                                       val_top1_acc, val_top5_acc,
                                       lr, epoch, gradient_norm,
@@ -162,7 +160,7 @@ class Logger:
         wb.log(log_dict, step=epoch)
 
     def log_train_metrics_to_wandb(
-        avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
+        self, avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
         train_top5_acc, avg_val_classification_loss, avg_val_router_loss, 
         avg_val_total_loss, val_top1_acc, val_top5_acc, lr, epoch, gradient_norm, 
         best_val_loss, router_metrics

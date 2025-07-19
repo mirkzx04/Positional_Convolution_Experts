@@ -194,7 +194,7 @@ class PCENetwork(nn.Module):
             self.router.enable_metrics_cache()
             
         # get experts scores
-        exp_scores = self.router(X_patches_proj, self.thresholds[layer_idx], self.hard_threshold_router)
+        exp_scores = self.router(X_patches_proj, layer_idx, self.thresholds[layer_idx], self.hard_threshold_router)
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores

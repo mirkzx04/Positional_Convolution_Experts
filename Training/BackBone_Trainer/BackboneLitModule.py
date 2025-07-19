@@ -15,6 +15,7 @@ class BackboneLitModule(pl.LightningModule):
                 optimizer,
                 str_epoch,
                 str_train_batch,
+                str_val_batch,
                 train_loss_history,
                 val_loss_history,
                 augmentation,
@@ -22,7 +23,8 @@ class BackboneLitModule(pl.LightningModule):
                 weight_decay,
                 phase_multipliers,
                 actual_phase,
-                num_classes,
+                class_names,
+                device
             ):
         
         """
@@ -32,22 +34,23 @@ class BackboneLitModule(pl.LightningModule):
             model (torch.nn.Module): The backbone model to be trained.
             optimizer (torch.optim.Optimizer): The optimizer for training.
             lr_scheduler (torch.optim.lr_scheduler._LRScheduler): The learning rate scheduler.
-            num_classes (int): Number of classes for classification tasks.
+            class_names (int): Number of classes for classification tasks.
         """
 
         super().__init__()
 
         self.model = PCE
-        self.num_classes = num_classes
+        self.class_names = class_names
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
 
         self.start_epoch = str_epoch
         self.start_train_batch = str_train_batch
+        self.start_val_batch = str_val_batch
 
         self.train_loss_history = train_loss_history
         self.val_loss_history = val_loss_history
-        self.best_val_loss = '-inf'
+        self.best_val_loss = float('+inf')
  
         self.lr_phase_multipliers = phase_multipliers
         self.lr = lr
@@ -60,11 +63,11 @@ class BackboneLitModule(pl.LightningModule):
         self.val_losses = []
 
         self.accuracy_metrics = {
-            'top1_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=1),
-            'top5_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=5),
+            'top1_train' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=1),
+            'top5_train' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=5),
 
-            'top1_val' : Accuracy(task='multiclass', num_classes=num_classes, top_k=1),
-            'top5_val' : Accuracy(task='multiclass', num_classes=num_classes, top_k=5)
+            'top1_val' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=1),
+            'top5_val' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=5)
         }
 
         self.criterion = torch.nn.CrossEntropyLoss()
@@ -77,13 +80,13 @@ class BackboneLitModule(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         """
-        Perform a single training step.
+        Perform a single training step.len(class_names)
 
         Args:
             batch (tuple): A tuple containing the input data and labels.
             batch_idx (int): The index of the current batch.
         """
-        if self.current_epoch < self.start_epoch and batch_idx < self.start_train_batch:
+        if self.current_epoch < self.start_epoch or batch_idx < self.start_train_batch:
             return None
         
         data, labels = batch
@@ -98,7 +101,7 @@ class BackboneLitModule(pl.LightningModule):
 
         self.train_losses.append(loss.item())
 
-        if self.num_classes >= 5:
+        if len(self.class_names) >= 5:
             self.accuracy_metrics['top1_train'].update(logits, labels)
             self.accuracy_metrics['top5_train'].update(logits, labels)
 
@@ -110,11 +113,16 @@ class BackboneLitModule(pl.LightningModule):
             'val_loss_history' : self.val_loss_history
         }
 
-    def on_train_epoch_end(self, trainer):
+    def on_train_epoch_start(self):
+        self.self.accuracy_metrics['top1_train'].reset()
+        self.accuracy_metrics['top1_train'].reset()
+
+    def my_on_train_epoch_end(self, trainer):
         """
         Called at the end of each training epoch.
         """
-        
+        if self.start_val_batch != 0:
+            self.start_train_batch = 0
         self.avg_train_loss = torch.tensor(self.train_losses).mean().item()
         self.train_losses.clear()
 
@@ -143,11 +151,11 @@ class BackboneLitModule(pl.LightningModule):
         predictions = torch.argmax(probabilities, dim=1)
 
         loss = self.criterion(logits, labels)
-        self.val_loss_history(loss.item())
+        self.val_loss_history.append(loss.item())
 
         self.val_losses.append(loss.item())
 
-        if self.num_classes >= 5:
+        if len(self.class_names) >= 5:
             self.accuracy_metrics['top1_val'].update(logits, labels)
             self.accuracy_metrics['top5_val'].update(logits, labels)
 
@@ -155,17 +163,22 @@ class BackboneLitModule(pl.LightningModule):
             'pred_labels': predictions,
             'loss': loss,
         }
+    
+    def on_validation_start(self):
+        self.self.accuracy_metrics['top1_val'].reset()
+        self.accuracy_metrics['top1_val'].reset()
 
     def on_validation_epoch_end(self):
         """
         Called at the end of each validation epoch.
         """
-
+        if self.start_val_batch != 0:
+            self.start_val_batch = 0
         self.avg_val_loss = torch.tensor(self.val_losses).mean().item()
         self.val_losses.clear()
 
-        if self.avg_val_total_losses < self.best_val_loss:
-            self.best_val_loss = self.avg_val_total_losses
+        if self.avg_val_loss < self.best_val_loss:
+            self.best_val_loss = self.avg_val_loss
 
         return {
             'avg_val_loss': self.avg_val_loss,
@@ -193,7 +206,7 @@ class BackboneLitModule(pl.LightningModule):
         total_grad_norm = 0.0
         
         for param in model.parameters():
-            if param.grad is not None:
+            if param.grad is not None and param.requires_grad:
                 param_norm = torch.norm(param.grad.data).item()
                 total_grad_norm += param_norm ** 2
         

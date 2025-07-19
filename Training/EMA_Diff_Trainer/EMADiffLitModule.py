@@ -15,6 +15,7 @@ class EMADiffLitModule(pl.LightningModule):
                 optimizer,
                 str_epoch,
                 str_train_batch,
+                str_val_batch,
                 train_loss_history,
                 val_loss_history,
                 augmentation,
@@ -22,7 +23,8 @@ class EMADiffLitModule(pl.LightningModule):
                 lr,
                 weight_decay,
                 actual_phase,
-                num_classes
+                class_names,
+                device
             ):
         
         """
@@ -49,12 +51,13 @@ class EMADiffLitModule(pl.LightningModule):
         super().__init__()
 
         self.model = PCE
-        self.num_classes = num_classes
+        self.class_names = class_names
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
 
         self.start_epoch = str_epoch
         self.start_train_batch = str_train_batch
+        self.start_val_batch = str_val_batch
 
         self.train_loss_history = train_loss_history
         self.val_loss_history = val_loss_history
@@ -77,18 +80,18 @@ class EMADiffLitModule(pl.LightningModule):
         self.val_router_losses = []
         self.val_total_losses = []
 
-        self.best_val_loss = '-inf'
+        self.best_val_loss = float('+inf')
 
         self.accuracy_metrics = {
-            'top1_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=1),
-            'top5_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=5),
+            'top1_train' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=1).to(device),
+            'top5_train' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=5).to(device),
 
-            'top1_val' : Accuracy(task='multiclass', num_classes=num_classes, top_k=1),
-            'top5_val' : Accuracy(task='multiclass', num_classes=num_classes, top_k=5)
+            'top1_val' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=1).to(device),
+            'top5_val' : Accuracy(task='multiclass', num_classes=len(class_names), top_k=5).to(device)
         }
 
-        self.confidence_weight = 0.01, 
-        self.anticollapse = 0.001,
+        self.confidence_weight = 0.01
+        self.anticollapse = 0.001
         self.router_metrics = False
 
         self.criterion = torch.nn.CrossEntropyLoss()
@@ -116,7 +119,7 @@ class EMADiffLitModule(pl.LightningModule):
         Returns:
             dict: Dictionary containing predictions, losses, and batch index.
         """
-        if self.current_epoch < self.start_epoch and batch_idx < self.start_train_batch:
+        if self.current_epoch < self.start_epoch or batch_idx < self.start_train_batch:
             return None
         
         data, labels = batch
@@ -130,15 +133,19 @@ class EMADiffLitModule(pl.LightningModule):
         class_loss = self.criterion(logits, labels)
 
         # Compute router loss
-        router_loss = self.router_loss()
-        
-        total_loss = class_loss.item() + router_loss.item()
+        router_loss_out = self.router_loss()
+        if isinstance(router_loss_out, tuple):
+            router_loss = router_loss_out[0]
+        else:
+            router_loss = router_loss_out
+
+        total_loss = class_loss + router_loss
 
         self.train_class_losses.append(class_loss.item())
         self.train_router_losses.append(router_loss.item())
         self.train_total_losses.append(total_loss.item())
 
-        if self.num_classes >= 5:
+        if len(self.class_names) >= 5:
             self.accuracy_metrics['top1_train'].update(logits, labels)
             self.accuracy_metrics['top5_train'].update(logits, labels)
 
@@ -149,8 +156,15 @@ class EMADiffLitModule(pl.LightningModule):
             'loss' : total_loss,
             'actual_batch' : batch_idx
         }
+
+    def on_after_backward(self):
+        self.gradient_norm = self.calculate_gradient_norm(self.model)
     
-    def on_train_epoch_end(self):
+    def on_train_epoch_start(self):
+        self.accuracy_metrics['top1_train'].reset()
+        self.accuracy_metrics['top5_train'].reset()
+
+    def my_on_train_epoch_end(self):
         """
         Called at the end of the training epoch to compute and reset average losses.
 
@@ -162,6 +176,8 @@ class EMADiffLitModule(pl.LightningModule):
         Returns:
             dict: Dictionary with training and validation loss histories and current phase.
         """
+        if self.start_train_batch != 0:
+            self.start_train_batch = 0
         self.avg_train_class_losses = torch.tensor(self.train_class_losses).mean().item()
         self.avg_train_router_losses = torch.tensor(self.train_router_losses).mean().item()
         self.avg_train_total_losses = torch.tensor(self.train_total_losses).mean().item()
@@ -187,6 +203,8 @@ class EMADiffLitModule(pl.LightningModule):
         Returns:
             dict: Dictionary containing predictions, losses, batch index, and loss histories.
         """ 
+        if self.current_epoch < self.start_epoch and batch_idx < self.start_val_batch:
+            return None
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
 
@@ -206,7 +224,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.val_router_losses.append(router_loss.item())
         self.val_total_losses.append(total_loss.item())
 
-        if self.num_classes >= 5:
+        if len(self.class_names)>= 5:
             self.accuracy_metrics['top1_val'].update(logits, labels)
             self.accuracy_metrics['top5_val'].update(logits, labels)
 
@@ -218,6 +236,10 @@ class EMADiffLitModule(pl.LightningModule):
             'actual_batch' : batch_idx,
         }
 
+    def on_validation_epoch_start(self):
+        self.accuracy_metrics['top1_val'].reset()
+        self.accuracy_metrics['top5_val'].reset()
+
     def on_validation_epoch_end(self):
         """
         Called at the end of the validation epoch to compute and reset average losses and metrics.
@@ -225,6 +247,9 @@ class EMADiffLitModule(pl.LightningModule):
         Returns:
             dict: Dictionary with average losses, accuracies, epoch info, gradient norm, best validation loss, and router metrics.
         """
+        if self.start_val_batch != 0:
+            self.start_val_batch = 0
+
         self.avg_val_class_losses = torch.tensor(self.val_class_losses).mean().item()
         self.avg_val_router_losses = torch.tensor(self.val_router_losses).mean().item()
         self.avg_val_total_losses = torch.tensor(self.val_total_losses).mean().item()
@@ -258,7 +283,7 @@ class EMADiffLitModule(pl.LightningModule):
         total_grad_norm = 0.0
         
         for param in self.model.parameters():
-            if param.grad is not None:
+            if param.grad is not None and param.requires_grad:
                 param_norm = torch.norm(param.grad.data).item()
                 total_grad_norm += param_norm ** 2
         
@@ -334,6 +359,7 @@ class EMADiffLitModule(pl.LightningModule):
         all_cache_metrics = []
 
         for key, value in metrics.items():
+            value = value.detach()
             if isinstance(value,torch.Tensor):
                 if value.dim() == 1:
                     cache_metrics[key] = value.mean().item()

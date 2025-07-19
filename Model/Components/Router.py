@@ -180,7 +180,7 @@ class Router(nn.Module):
             self.last_forward_cache = {
                 'patch/patch_embeddings': patch_emb.detach(),
                 'ccosine/osine_similarities': logits.detach(),
-                'weights/weights_raw': weights.detach(),
+                'weights/weights_raw': weights,
                 # 'weights_filtered': weights_filtered.detach(),
                 # 'base_threshold': threshold,  
                 # 'adaptive_threshold': adaptive_threshold.detach(),
@@ -190,7 +190,7 @@ class Router(nn.Module):
             }
         if self.keys[layer_idx].requires_grad == False:
             # Update keys with exponential moving average
-            self.ema(patch_emb, weights)
+            self.ema(patch_emb, weights, layer_idx)
 
         return weights
 
@@ -252,4 +252,4 @@ class Router(nn.Module):
                 centroids * (1.0 - self.ema_alpha)
             )
 
-            self.keys[layer_idx].data = F.normalize(self.keys.data, dim = -1)
+            self.keys[layer_idx].data = F.normalize(self.keys[layer_idx].data, dim = -1)

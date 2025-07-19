@@ -181,14 +181,11 @@ def get_trainable_params(PCE, phase):
     """
     if phase == 'backbone':
         for p in PCE.router.parameters() : p.requires_grad = False
-        return list(filter(lambda p : p.requires_grad, PCE.parameters()))
     elif phase == 'ema_only':
         for p in PCE.router.parameters() : p.requires_grad = True
         for key in PCE.router.keys : key.requires_grad = False
-        return [p for p in PCE.router.parameters() if p.requires_grad]
     elif phase == 'deff':
         for key in PCE.router.keys : key.requires_grad = True
-        return [p for p in PCE.router.parameters() if p.requires_grad]
 
 def load_checkpoints(
         checkpointer, PCE, lr, weight_decay, phase_multipliers,
@@ -216,7 +213,7 @@ def load_checkpoints(
         str_train_batch = str_epoch = 0
         val_loss_history = train_loss_history = []
         optimizer = Adam(
-            params=get_trainable_params(PCE, phase),
+            params=PCE.parameters(),
             lr=lr,
             weight_decay=weight_decay
         )
@@ -234,7 +231,7 @@ def load_checkpoints(
         val_loss_history = checkpoint['val_history']
 
         optimizer = Adam(
-            params=get_trainable_params(PCE, phase),
+            params=PCE.parameters(),
             lr=lr,
             weight_decay=weight_decay
         )
@@ -252,7 +249,7 @@ def load_checkpoints(
 
 def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
              back_bone_epochs, ema_only_epochs, differentiable_epochs, 
-             lr, weight_decay, phase_multipliers, device, augmentation):
+             lr, weight_decay, phase_multipliers, device, augmentation, class_names):
     """
     Training function
 
@@ -286,7 +283,9 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
 
     idx_last_phase = idx_str_phase = phases.index(str_phase)
 
-    checkpointer_cb = CheckpointCallBack(checkpointer, 1)
+    checkpointer_cb = CheckpointCallBack(checkpointer, str_epoch, 1)
+
+    get_trainable_params(PCE, str_phase)
 
     # Phases training
     for phase in range(idx_str_phase, len(phases)):
@@ -294,18 +293,16 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
         idx_actual_phase = phases.index(actual_phase)
 
         if idx_actual_phase > idx_last_phase:
-            new_optim_params = get_trainable_params(PCE, phase)
-            optimizer.add_param_group({'params' : new_optim_params})
+            get_trainable_params(PCE, phase)
         
         if actual_phase == 'backbone':
-            # if str_epoch == 0:
-            #     # if str_epoch == 0 means that training is start of first time
-            #     print('-- START Training Backbone ---')
-            #     PCE.initialize_router_key(train_set)
-            # else: 
-            #     print(f'--- RESUME Training backbone from {str_epoch} epoch')
+            if str_epoch == 0:
+                print('-- START Training Backbone ---')
+                PCE.initialize_router_key(train_set)
+            else: 
+                print(f'--- RESUME Training backbone from {str_epoch} epoch')
 
-            logger_cb = BackboneLoggerCallBack(logger, 5)
+            logger_cb = BackboneLoggerCallBack(logger, str_epoch, 5)
             lit_module = BackboneLitModule(
                 PCE,
                 lr_scheduler,
@@ -319,7 +316,8 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 weight_decay,
                 phase_multipliers,
                 actual_phase,
-                num_classes
+                class_names,
+                device
             )       
             trainer = pl.Trainer(
                 max_epochs=back_bone_epochs,
@@ -328,10 +326,12 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 precision='16-mixed',
                 gradient_clip_val=0.5,
                 gradient_clip_algorithm='norm',
-                accelerator=device
+                accelerator=device,
+                num_sanity_val_steps=0,
+                enable_checkpointing= False,
             )
         if actual_phase == 'ema_only':
-            logger_cb = EMADiffLitModule(logger, 5)
+            logger_cb = EMADiffLitModule(logger, str_epoch, 5)
             lit_module = EMADiffLitModule(
                 PCE,
                 lr_scheduler,
@@ -345,8 +345,8 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 lr,
                 weight_decay,
                 actual_phase,
-                num_classes,
-                num_classes
+                class_names,
+                device
             )
             trainer = pl.Trainer(
                 max_epochs=ema_only_epochs,
@@ -355,10 +355,12 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 precision='16-mixed',
                 gradient_clip_val=0.5,
                 gradient_clip_algorithm='norm',
-                accelerator=device
+                accelerator=device,
+                num_sanity_val_steps=0,
+                enable_checkpointing= False,
             )
         if actual_phase == 'diff':
-            logger_cb = EMADiffLitModule(logger, 5)
+            logger_cb = EMADiffLitModule(logger, str_epoch, 5)
             lit_module = EMADiffLitModule(
                 PCE,
                 lr_scheduler,
@@ -372,7 +374,8 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 lr,
                 weight_decay,
                 actual_phase,
-                num_classes
+                class_names,
+                device
             )
             trainer = pl.Trainer(
                 max_epochs=differentiable_epochs,
@@ -381,7 +384,9 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 precision='16-mixed',
                 gradient_clip_val=0.5,
                 gradient_clip_algorithm='norm',
-                accelerator=device
+                accelerator=device,
+                num_sanity_val_steps=0,
+                enable_checkpointing= False,
             )
         
         trainer.fit(lit_module, train_loader, val_loader)
@@ -528,5 +533,6 @@ if __name__ == "__main__":
         weight_decay=weight_decay,
         phase_multipliers=phase_multipliers,
         device=device,
-        augmentation=augmentation
+        augmentation=augmentation,
+        class_names = class_names
     )

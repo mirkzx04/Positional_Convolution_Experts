@@ -52,7 +52,7 @@ class PatchExtractor(nn.Module):
 
                 coords.append([x_norm, y_norm]) # (x,y) normalizede 
 
-        coords = torch.tensor(coords, dtype=torch.float32)
+        coords = torch.tensor(coords, dtype=torch.float32, device=image.device)
         coords = repeat(coords, 'n coord -> b n coord h w', b = B, h = self.patch_size, w = self.patch_size)
 
         # Add pixel-level position within patch
@@ -63,8 +63,8 @@ class PatchExtractor(nn.Module):
         )
 
         # Shape: (1, 1, 1, p, p) → broadcast to (B, P, 1, p, p)
-        xx = xx.unsqueeze(0).unsqueeze(0).unsqueeze(2).expand(B, patches.shape[1], 1, self.patch_size, self.patch_size)
-        yy = yy.unsqueeze(0).unsqueeze(0).unsqueeze(2).expand(B, patches.shape[1], 1, self.patch_size, self.patch_size)
+        xx = xx.unsqueeze(0).unsqueeze(0).unsqueeze(2).expand(B, patches.shape[1], 1, self.patch_size, self.patch_size).to(image.device)
+        yy = yy.unsqueeze(0).unsqueeze(0).unsqueeze(2).expand(B, patches.shape[1], 1, self.patch_size, self.patch_size).to(image.device)
 
         # Concatenate all channels: original + patch coords + pixel coords
         patches = patches.to(image.device)
