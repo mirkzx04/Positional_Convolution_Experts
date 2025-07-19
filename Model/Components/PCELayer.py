@@ -1,0 +1,36 @@
+import torch
+
+from torch import nn
+
+from ConvExpert import ConvExpert
+
+class PCELayer(nn.Module):
+    def __init__(self,
+                inpt_channel,
+                out_channel,
+                num_experts,
+                dropout,
+                patch_size):
+        super().__init__()
+        self.experts = nn.ModuleList([
+            ConvExpert(
+                in_channel=inpt_channel,
+                out_channel=out_channel,
+                dropout=dropout,
+            )
+            for _ in range(num_experts)
+        ])
+        self.conv_proj = nn.Conv2d(
+            in_channels=inpt_channel,
+            out_channels=36,
+            kernel_size=3,
+            padding=1,
+        )
+        self.final_conv = nn.Conv2d(
+            in_channels=out_channel,
+            out_channels=out_channel,
+            kernel_size=1,
+            padding=3
+        )
+        self.threhsold = nn.Parameter(torch.tensor(0.5, dtype=torch.float32, requires_grad=True))
+        self.patch_size = patch_size

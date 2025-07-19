@@ -6,9 +6,11 @@ from torch.nn import LazyLinear
 from einops import rearrange
 
 from Model.Components.ConvExpert import ConvExpert
+from Model.Components.Router import Router
+from Model.Components.PCELayer import PCELayer
+
 from Datasets_Classes.PatchExtractor import PatchExtractor
 
-from Model.Components.Router import Router
 
 class PCENetwork(nn.Module):
     def __init__(self, 
@@ -50,10 +52,10 @@ class PCENetwork(nn.Module):
         # Defines layers and your experts + final convolution of the layer 
         # Defines convolution for pixel projection for the SSP embeddigs, used in router
         self.layers = nn.ModuleList()
-        self.final_conv = nn.ModuleList()        
-        self.convs_proj = nn.ModuleList()
-        self.thresholds = nn.ParameterList()
-        self.patches_sizes = []
+        # self.final_conv = nn.ModuleList()        
+        # self.convs_proj = nn.ModuleList()
+        # self.thresholds = nn.ParameterList()
+        # self.patches_sizes = []
 
         self.hard_threshold_router = hard_threshold_router
 
@@ -84,48 +86,22 @@ class PCENetwork(nn.Module):
             None
         """
         patch_size = self.patch_extractor.patch_size
+
         for l in range(layer_number):
-            
-            # Defines all convolution parts of the layer, including experts
-            self.convs_proj.append(
-                nn.Conv2d(
-                    in_channels = inpt_channel,
-                    out_channels = 16,
-                    kernel_size=3,
-                    padding=1,
-                )
-            )
-            experts = nn.ModuleList([
-                ConvExpert(
-                    in_channel=inpt_channel,
-                    out_channel=out_channel,
-                    dropout=dropout
-                )
-                for _ in range(num_experts)
-            ])
-            self.layers.append(experts)
-
-            self.final_conv.append(nn.Conv2d(
-                in_channels=out_channel,
-                out_channels=out_channel,
-                kernel_size=1,
-                padding=4
+            self.layers.append(PCELayer(
+                inpt_channel=inpt_channel,
+                out_channel=out_channel,
+                num_experts=num_experts,
+                dropout=dropout,
+                patch_size=patch_size
             ))
-
-            # Defines threshold for experts scores
-            self.thresholds.append(
-                nn.Parameter(
-                    torch.tensor(0.5, dtype=torch.float32, requires_grad=True)
-                )
-            )
-            self.patches_sizes.append(patch_size)
-
             patch_size = patch_size - 3 if patch_size - 3 >= 8 else patch_size
 
             inpt_channel = out_channel + 4   
 
             if l % 2 == 0:
                 out_channel *= 2 
+            
 
     def initialize_keys(self, X):
         """
@@ -160,14 +136,14 @@ class PCENetwork(nn.Module):
                 w = w_patches
             )
 
-    def get_patches(self, X, layer_idx):
+    def get_patches(self, X, patch_size):
         """
         Get patches and patches information
 
         Args:
             X (torch.Tensor) : Tensor of shape [B, C, H, W]
         """
-        self.patch_extractor.patch_size = self.patches_sizes[layer_idx]
+        self.patch_extractor.patch_size = patch_size
         X_patches, h_patches, w_patches = self.patch_extractor(X)
         B, P, C, pH, pW = X_patches.shape
 
@@ -175,7 +151,7 @@ class PCENetwork(nn.Module):
 
         return X_patches, X_patches_reshape, h_patches, w_patches
 
-    def get_exp_scores(self, X_patches_reshape, layer_idx, B, P):
+    def get_exp_scores(self, X_patches_reshape,layer_idx, conv_proj, B, P, thresholds):
         """
         Get experts scores from router
 
@@ -188,13 +164,13 @@ class PCENetwork(nn.Module):
             where num_experts is the number of experts in the layer
         """
 
-        X_patches_proj = self.convs_proj[layer_idx](X_patches_reshape)
+        X_patches_proj = conv_proj(X_patches_reshape)
         # Enable cache metric if rqeusted
         if self.enable_router_metrics:
             self.router.enable_metrics_cache()
             
         # get experts scores
-        exp_scores = self.router(X_patches_proj, layer_idx, self.thresholds[layer_idx], self.hard_threshold_router)
+        exp_scores = self.router(X_patches_proj, layer_idx, thresholds, self.hard_threshold_router)
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores
@@ -223,31 +199,37 @@ class PCENetwork(nn.Module):
             logits (torch.tensor) : tensor beatches (B, num_classes)
         """
 
-        for layer_idx, layer_experts in enumerate(self.layers):
+        for layer_idx, layer in enumerate(self.layers):
+            # Layer components
+            experts = layer.experts
+            conv_proj = layer.conv_proj
+            final_conv = layer.final_conv
+            threshold = layer.threshold
+            patch_size = layer.patch_size
+
+            num_expert = len(experts)
+
             # Divides feature map / input img in patches
-            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, layer_idx)
+            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, patch_size)
             B, P, _, _, _ = X_patches.shape
 
             # Take experts scores
             exp_scores = self.get_exp_scores(
-                X_patches_reshape, layer_idx, B, P
+                X_patches_reshape, layer_idx, conv_proj, threshold, B, P
             )
+            
+            # Applied all experts at batch
+            all_outputs = [experts(X_patches_reshape) for expert in experts]
+            all_outputs = torch.stack(all_outputs, dim = 0) # Shape : [num_experts, B*P, C_out, H_out, W_out]
 
-            output = None
-            for exp_idx, expert in enumerate(layer_experts):
-                # Get expert score
-                exp_score = exp_scores[:, :, exp_idx]
+            # Reshape [num_experts, B*P, C_out, H_out, W_out] -> [B, P, num_experts, C_out, H_out, W_out]
+            all_outputs = all_outputs.permute(1, 0, 2, 3, 4) # Shape : [B*P, num_experts, C_out, H_out, W_out]
+            C_out, H_out, W_out = all_outputs.shape[2], all_outputs.shape[3], all_outputs.shape[4]
+            all_outputs = all_outputs.reshape(B, P, num_expert, C_out, H_out, W_out)
 
-                # Applies expert at patch, reshape dimension
-
-                out = expert(X_patches_reshape)
-                _, C_out, H_out, W_out = out.shape
-                out = out.reshape(B,P, C_out, H_out, W_out)
-
-                # Concatenation of the experts feature map with weighted sum
-                if output is None:
-                    output = torch.zeros(B, P, C_out, H_out, W_out, device=out.device, dtype=out.dtype)
-                output += out * exp_score.unsqueeze(2).unsqueeze(3).unsqueeze(4)
+            # Applied router scores
+            exp_score = exp_score.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) #Shape : [B, P, num_experts, 1,1,1]
+            output = (all_outputs * exp_score).sum(dim = 2) # Shape : [B, P, C_out, H_out, W_out]
 
             # Reassamble patch in in a single image [B, nP, C, H ,W] -> [B, C, H, W]
             # and applied final convolution 1x1 
@@ -257,7 +239,7 @@ class PCENetwork(nn.Module):
                 h = h_patches,
                 w = w_patches
             )
-            output = self.final_conv[layer_idx](output)
+            output = final_conv(output)
 
             X = output
 
