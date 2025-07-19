@@ -210,7 +210,7 @@ def load_checkpoints(
 
     if checkpoint is None:
         phase = 'backbone'
-        str_train_batch = str_epoch = 0
+        str_val_batch = str_train_batch = str_epoch = 0
         val_loss_history = train_loss_history = []
         optimizer = Adam(
             params=PCE.parameters(),
@@ -227,6 +227,7 @@ def load_checkpoints(
         phase = checkpoint['phase']
         str_epoch = checkpoint['start_epochs']
         str_train_batch = checkpoint['train_batch']
+        str_val_batch = checkpoint['val_batch']
         train_loss_history = checkpoint['train_history']
         val_loss_history = checkpoint['val_history']
 
@@ -245,7 +246,7 @@ def load_checkpoints(
         optimizer.load_state_dict(checkpoint['optimizer'])
         lr_scheduler.load_state_dict(checkpoint['scheduler'])
     
-    return phase, str_epoch, str_train_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler
+    return phase, str_epoch, str_train_batch, str_val_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler
 
 def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
              back_bone_epochs, ema_only_epochs, differentiable_epochs, 
@@ -277,7 +278,8 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
 
     # Get all checkpoints if exists
     PCE = checkpointer.model_checkpoints(PCE)
-    str_phase, str_epoch, str_train_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler = \
+    str_phase, str_epoch, str_train_batch, str_val_batch, train_loss_history, \
+    val_loss_history, optimizer, lr_scheduler = \
     load_checkpoints(checkpointer, PCE, lr, weight_decay, phase_multipliers,
         back_bone_epochs, ema_only_epochs, differentiable_epochs)
 
@@ -309,6 +311,7 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 optimizer,
                 str_epoch,
                 str_train_batch,
+                str_val_batch,
                 train_loss_history,
                 val_loss_history,
                 augmentation,
@@ -338,6 +341,7 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 optimizer,
                 str_epoch,
                 str_train_batch,
+                str_val_batch,
                 train_loss_history,
                 val_loss_history,
                 augmentation,
@@ -367,6 +371,7 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 optimizer,
                 str_epoch,
                 str_train_batch,
+                str_val_batch,
                 train_loss_history,
                 val_loss_history,
                 augmentation,
