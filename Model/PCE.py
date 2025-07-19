@@ -217,7 +217,7 @@ class PCENetwork(nn.Module):
             exp_scores = self.get_exp_scores(
                 X_patches_reshape, layer_idx, conv_proj, threshold, B, P
             )
-            
+
             # Applied all experts at batch
             all_outputs = [experts(X_patches_reshape) for expert in experts]
             all_outputs = torch.stack(all_outputs, dim = 0) # Shape : [num_experts, B*P, C_out, H_out, W_out]
@@ -228,7 +228,7 @@ class PCENetwork(nn.Module):
             all_outputs = all_outputs.reshape(B, P, num_expert, C_out, H_out, W_out)
 
             # Applied router scores
-            exp_score = exp_score.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) #Shape : [B, P, num_experts, 1,1,1]
+            exp_score = exp_scores.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) #Shape : [B, P, num_experts, 1,1,1]
             output = (all_outputs * exp_score).sum(dim = 2) # Shape : [B, P, C_out, H_out, W_out]
 
             # Reassamble patch in in a single image [B, nP, C, H ,W] -> [B, C, H, W]
