@@ -19,18 +19,18 @@ class CheckpointCallBack(pl.Callback):
 
                 # Recovering history 
                 train_loss_history = getattr(pl_module, 'train_loss_history')
-                train_val_history = getattr(pl_module, 'train_val_history')
+                val_loss_history = getattr(pl_module, 'val_loss_history')
                 actual_phase = getattr(pl_module, 'actual_phase')
 
                 self.checkpointer.save_checkpoints(
                     pl_module.model, 
                     optimizer, 
                     lr_scheduler, 
-                    trainer.current_epoch, 
-                    batch_idx, 
+                    trainer.current_epoch + 1, 
+                    batch_idx + 1, 
                     0,
                     train_loss_history, 
-                    train_val_history, 
+                    val_loss_history, 
                     actual_phase
                 )
 
@@ -53,9 +53,9 @@ class CheckpointCallBack(pl.Callback):
                     pl_module.model, 
                     optimizer, 
                     lr_scheduler, 
-                    trainer.current_epoch, 
+                    trainer.current_epoch + 1, 
                     0, 
-                    batch_idx,
+                    batch_idx + 1,
                     train_loss_history, 
                     train_val_history, 
                     actual_phase
@@ -75,7 +75,7 @@ class CheckpointCallBack(pl.Callback):
 
 
         self.checkpointer.save_checkpoints(
-            pl_module.model, optimizer, lr_scheduler, trainer.current_epoch, 0,0,
+            pl_module.model, optimizer, lr_scheduler, trainer.current_epoch + 1, 0,0,
             train_loss_history, train_val_history, actual_phase)
 
 
