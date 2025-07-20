@@ -27,8 +27,6 @@ from Training.Checkpointer import Checkpointer
 from Training.Logger import Logger
 from Training.CheckpointCallBack import CheckpointCallBack
 
-from Training.BackBone_Trainer.BackboneLitModule import BackboneLitModule
-from Training.BackBone_Trainer.BackboneLoggerCallBack import BackboneLoggerCallBack
 
 from Training.EMA_Diff_Trainer.EMADiffLitModule import EMADiffLitModule
 from Training.EMA_Diff_Trainer.EMADiffLoggerCallBack import EMADiffLoggerCallBack
@@ -295,11 +293,11 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
         
         if actual_phase == 'ema_only':
             if str_epoch == 0:
-                print('-- START Training Backbone ---')
-                PCE.initialize_router_key(train_set)
+                print('-- START Training | Initialize keys ---')
+                PCE.initialize_keys(train_set)
             else: 
-                print(f'--- RESUME Training backbone from {str_epoch} epoch')
-            logger_cb = EMADiffLitModule(logger, str_epoch, 5)
+                print(f'--- RESUME Training from {str_epoch} epoch')
+            logger_cb = EMADiffLoggerCallBack(logger, str_epoch, 5)
             lit_module = EMADiffLitModule(
                 PCE,
                 lr_scheduler,
@@ -335,7 +333,7 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 print("Backbone trainable:", sum(p.numel() for p in PCE.parameters() if p.requires_grad) - sum(p.numel() for p in PCE.router.parameters() if p.requires_grad))
                 str_epoch = ema_only_epochs + 1
 
-            logger_cb = EMADiffLitModule(logger, str_epoch, 5)
+            logger_cb = EMADiffLoggerCallBack(logger, str_epoch, 5)
             lit_module = EMADiffLitModule(
                 PCE,
                 lr_scheduler,
@@ -367,7 +365,7 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
         
         trainer.fit(lit_module, train_loader, val_loader)
         if actual_phase != 'diff':
-            PCE.initialize_router_keys(train_set)
+            PCE.initialize_keys(train_set)
         idx_last_phase = idx_actual_phase
 
 if __name__ == "__main__":
@@ -500,7 +498,7 @@ if __name__ == "__main__":
         PCE=PCE,
         val_loader=validation_loader,
         train_loader=train_loader,
-        train_set=train_dataset,
+        train_set=train_dataset.data,
         ema_only_epochs=ema_only_epochs,
         differentiable_epochs=differentiable_epochs,
         lr=lr,

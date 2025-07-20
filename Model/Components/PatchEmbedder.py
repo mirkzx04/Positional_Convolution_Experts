@@ -16,7 +16,7 @@ class PatchEmbedder(nn.Module):
         )
         self.flatten = nn.Flatten()
         self.mlp = nn.Sequential(
-            nn.Linear(128 * 2 * 2, 256),
+            nn.Linear(128 * patch_size // 2 * patch_size // 2, 256),
             nn.ReLU(inplace=True),
             nn.Linear(256, embed_dim)
         )

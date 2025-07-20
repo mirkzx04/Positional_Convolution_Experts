@@ -30,13 +30,13 @@ class Router(nn.Module):
         self.cache_enabled = False
         
         self.embedders = nn.ModuleList([
-            PatchEmbedder(info['in_channel'], info['out_channel'], info['patch_size'], info['embed_dim']) 
+            PatchEmbedder(info['in_channel'], info['patch_size'], info['embedd_dim']) 
             for info in pce_layer_info
         ])
 
         # Create keys
         self.keys = nn.ParameterList([
-            nn.Parameter(torch.randn(num_experts, info['embed_dim'], dtype=torch.float32), requires_grad=True)
+            nn.Parameter(torch.randn(num_experts, info['embedd_dim'], dtype=torch.float32), requires_grad=True)
             for info in pce_layer_info
         ])
 
