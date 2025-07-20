@@ -7,10 +7,10 @@ from sklearn.cluster import KMeans
 
 from torch import nn
 
-from .SSP import SSP
+from .PatchEmbedder import PatchEmbedder
 
 class Router(nn.Module):
-    def __init__(self,num_experts, num_layers, ema_alpha=0.9):
+    def __init__(self,num_experts, num_layers, pce_layer_info, ema_alpha=0.9):
         super().__init__()
         """
         Router constructor
@@ -28,25 +28,29 @@ class Router(nn.Module):
 
         self.last_forward_cache = None
         self.cache_enabled = False
-
-        # Get SSP Classs, use for embedding
-        self.ssp = SSP()
+        
+        self.embedders = nn.ModuleList([
+            PatchEmbedder(info['in_channel'], info['out_channel'], info['patch_size'], info['embed_dim']) 
+            for info in pce_layer_info
+        ])
 
         # Create keys
         self.keys = nn.ParameterList([
-            nn.Parameter(torch.randn(num_experts, 336), requires_grad=False)
-            for idx in range(num_layers)
+            nn.Parameter(torch.randn(num_experts, info['embed_dim'], dtype=torch.float32), requires_grad=True)
+            for info in pce_layer_info
         ])
 
         # Set parameters of adaptive threshold
-        self.logit_temp = torch.tensor(5.0, dtype=torch.float32, requires_grad=False) 
-        self.mask_beta = nn.Parameter(torch.tensor(10.))
+        self.logit_temp = nn.Parameter(torch.tensor(5.0, dtype=torch.float32), requires_grad=True)
+        self.mask_beta = nn.Parameter(torch.tensor(10., dtype=torch.float32), requires_grad=True)
         self.min_experts_active = max(1, 
             num_experts // 2 if num_experts <= 4 
             else (2 if num_experts < 8 else num_experts // 4)
         )
 
-        self.wth_max_c, self.wth_entropy_c, self.wth_gap_c = 0.4, 0.3, 0.3
+        self.wth_max_c = nn.Parameter(torch.tensor(0.4, dtype=torch.float32), requires_grad=True) 
+        self.wth_entropy_c = nn.Parameter(torch.tensor(0.3, dtype=torch.float32), requires_grad=True)
+        self.wth_gap_c = nn.Parameter(torch.tensor(0.3, dtype=torch.float32), requires_grad=True)
 
     def enable_metrics_cache(self):
         """
@@ -147,8 +151,7 @@ class Router(nn.Module):
             weights -> Tensor (B x nP, num_experts)
             where B is batch size, nP is number of patches, num_experts is number of experts in layer
         """
-        patch_emb = self.ssp(patch)
-        patch_emb = F.normalize(patch_emb, dim=-1)
+        patch_emb = self.embedders[layer_idx](patch)
 
         # Compute cosine simlarity between patch embedding and keys
         logits = patch_emb @ self.keys[layer_idx].T
@@ -213,9 +216,7 @@ class Router(nn.Module):
         """
 
         with torch.no_grad():
-
-            # Applied SSP for get patch embedding using K-Means
-            patch_emb = self.ssp(patches)
+            patch_emb = self.embedders[layer_idx](patches)
 
             # Initialize KMeans and fit for get centroids
             kmeans = KMeans(n_clusters = self.num_experts, n_init = 'auto', random_state = 42)

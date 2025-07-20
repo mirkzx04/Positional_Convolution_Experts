@@ -123,41 +123,6 @@ class Logger:
         # Log to wandb
         log_dict = {f'{phase}_predictions' : wandb_images}
         wb.log(log_dict, step = epoch)
-    
-    def log_backbone_metrics_to_wandb(self, avg_train_loss, avg_val_loss,
-                                      train_top1_acc, train_top5_acc,
-                                      val_top1_acc, val_top5_acc,
-                                      lr, epoch, gradient_norm,
-                                      best_val_loss):
-        """
-        Log backbone training metrics to wandb
-
-        Args:
-            avg_train_loss (float): Average training loss
-            avg_val_loss (float): Average validation loss
-            train_top1_acc (float): Training top-1 accuracy
-            train_top5_acc (float): Training top-5 accuracy
-            val_top1_acc (float): Validation top-1 accuracy
-            val_top5_acc (float): Validation top-5 accuracy
-            lr (float): Current learning rate
-            epoch (int): Current training epoch
-            gradient_norm (float): Norm of gradient
-            best_val_loss (float): Best validation loss
-        """
-        log_dict = {
-            'back_bone/avg_train_loss': avg_train_loss,
-            'back_bone/avg_val_loss': avg_val_loss,
-            'back_bone/train_top1_acc': train_top1_acc,
-            'back_bone/train_top5_acc': train_top5_acc,
-            'back_bone/val_top1_acc': val_top1_acc,
-            'back_bone/val_top5_acc': val_top5_acc,   
-            'back_bone/lr': lr,
-            'back_bone/epoch': epoch,
-            'back_bone/gradient_norm': gradient_norm,
-            'back_bone/best_val_loss': best_val_loss,
-        }
-
-        wb.log(log_dict, step=epoch)
 
     def log_train_metrics_to_wandb(
         self, avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,

@@ -44,35 +44,27 @@ class PCENetwork(nn.Module):
         self.enable_router_metrics = enable_router_metrics
 
         self.patch_extractor = PatchExtractor(patch_size)
-        self.router = Router(
-            num_experts=num_experts,
-            num_layers=layer_number,
-        )
 
-        # Defines layers and your experts + final convolution of the layer 
-        # Defines convolution for pixel projection for the SSP embeddigs, used in router
         self.layers = nn.ModuleList()
-        # self.final_conv = nn.ModuleList()        
-        # self.convs_proj = nn.ModuleList()
-        # self.thresholds = nn.ParameterList()
-        # self.patches_sizes = []
 
         self.hard_threshold_router = hard_threshold_router
 
-        inpt_channel = inpt_channel # Start channel (3 or 2) + 4 of positional information
-        out_channel = 8
-
-        self.create_layers(
-            inpt_channel=inpt_channel,
-            out_channel=out_channel,
+        layer_info = self.create_layers(
+            inpt_channel=inpt_channel, # Start channel (3 or 2) + 4 of positional information
             num_experts=num_experts,
             dropout=dropout,
             layer_number=layer_number,
         )        
 
+        self.router = Router(
+            num_experts=num_experts,
+            num_layers=layer_number,
+            pce_layer_info = layer_info
+        )
+
         self.linear_layer = LazyLinear(self.num_classes)
 
-    def create_layers(self, inpt_channel, out_channel, num_experts, dropout, layer_number):
+    def create_layers(self, inpt_channel, num_experts, dropout, layer_number):
         """
         Create layers of PCE Network
 
@@ -87,7 +79,11 @@ class PCENetwork(nn.Module):
         """
         patch_size = self.patch_extractor.patch_size
 
+        out_channel = 8
+        layer_info = []
         for l in range(layer_number):
+            layer_info.append({'in_channel': inpt_channel, 'out_channel' : out_channel, 'patch_size': patch_size, 'embedd_dim': 360})
+
             self.layers.append(PCELayer(
                 inpt_channel=inpt_channel,
                 out_channel=out_channel,
@@ -101,8 +97,9 @@ class PCENetwork(nn.Module):
 
             if l % 2 == 0:
                 out_channel *= 2 
-            
 
+        return layer_info
+    
     def initialize_keys(self, X):
         """
         Initialize router keys with projection convolution
@@ -110,12 +107,12 @@ class PCENetwork(nn.Module):
         Args:
             X (torch.Tensor) : Training set 
         """
-        for layer_idx in self.layers:
+        for layer_idx, layer in enumerate(self.layers):
             # Get patches
-            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X)
+            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, layer.patch_size)
 
             # Check if X_patches_reshape has same channels as conv_proj
-            expected_in_channels = self.convs_proj[layer_idx].in_channels
+            expected_in_channels = self.router.embedders[layer_idx].cnn[0].in_channels
             current_channels = X_patches_reshape.shape[1]
             if current_channels < expected_in_channels:
                 diff = expected_in_channels - current_channels
@@ -125,8 +122,7 @@ class PCENetwork(nn.Module):
             elif current_channels > expected_in_channels:
                 X_patches_reshape = X_patches_reshape[:, :expected_in_channels, :, :]
 
-            proj_patch = self.convs_proj[layer_idx](X_patches_reshape)
-            self.router.initialize_keys(proj_patch)
+            self.router.initialize_keys(X_patches_reshape, layer_idx)
 
             # Recompose the patches into the original image
             X = rearrange(
@@ -231,7 +227,7 @@ class PCENetwork(nn.Module):
             exp_score = exp_scores.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) #Shape : [B, P, num_experts, 1,1,1]
             output = (all_outputs * exp_score).sum(dim = 2) # Shape : [B, P, C_out, H_out, W_out]
 
-            # Reassamble patch in in a single image [B, nP, C, H ,W] -> [B, C, H, W]
+            # Reassamble patch in in a single image [B, P, C, H ,W] -> [B, C, H, W]
             # and applied final convolution 1x1 
             output = rearrange(
                 output, 

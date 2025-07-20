@@ -3,7 +3,7 @@ import torch
 from torch import nn
 
 from ConvExpert import ConvExpert
-
+from FinalConv import FinalConv
 class PCELayer(nn.Module):
     def __init__(self,
                 inpt_channel,
@@ -26,11 +26,13 @@ class PCELayer(nn.Module):
             kernel_size=3,
             padding=1,
         )
+        # self.final_conv = FinalConv(out_channel, out_channel)
         self.final_conv = nn.Conv2d(
             in_channels=out_channel,
             out_channels=out_channel,
-            kernel_size=1,
-            padding=3
+            padding=1,
+            kernel_size=1
         )
+
         self.threhsold = nn.Parameter(torch.tensor(0.5, dtype=torch.float32, requires_grad=True))
         self.patch_size = patch_size

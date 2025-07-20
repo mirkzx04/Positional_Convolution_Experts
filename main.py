@@ -179,9 +179,7 @@ def get_trainable_params(PCE, phase):
         PCE : (nn.Module) is a models
         phase (string) : string that rappresents current phase
     """
-    if phase == 'backbone':
-        for p in PCE.router.parameters() : p.requires_grad = False
-    elif phase == 'ema_only':
+    if phase == 'ema_only':
         for p in PCE.router.parameters() : p.requires_grad = True
         for key in PCE.router.keys : key.requires_grad = False
     elif phase == 'deff':
@@ -189,7 +187,7 @@ def get_trainable_params(PCE, phase):
 
 def load_checkpoints(
         checkpointer, PCE, lr, weight_decay, phase_multipliers,
-        back_bone_epochs, ema_only_epochs, differentiable_epochs):
+        ema_only_epochs, differentiable_epochs):
     """
     Get the last checkpoint if exist
 
@@ -199,7 +197,6 @@ def load_checkpoints(
         lr (float): Learning rate to use for optimizer.
         weight_decay (float): Weight decay (L2 penalty) for optimizer.
         phase_multipliers (list): Multipliers for different training phases.
-        back_bone_epochs (int): Number of epochs for backbone training phase.
         ema_only_epochs (int): Number of epochs for EMA-only training phase.
         differentiable_epochs (int): Number of epochs for differentiable training phase.
     Returns:
@@ -209,7 +206,7 @@ def load_checkpoints(
     checkpoint = checkpointer.train_checkpoints()
 
     if checkpoint is None:
-        phase = 'backbone'
+        phase = 'ema_only'
         str_val_batch = str_train_batch = str_epoch = 0
         val_loss_history = train_loss_history = []
         optimizer = Adam(
@@ -219,7 +216,7 @@ def load_checkpoints(
         )
         lr_scheduler = PCEScheduler(
             optimizer=optimizer,
-            phase_epochs=[back_bone_epochs + ema_only_epochs, differentiable_epochs],
+            phase_epochs=[ema_only_epochs, differentiable_epochs],
             base_lr=lr,
             phase_multipliers=phase_multipliers
         )
@@ -238,7 +235,7 @@ def load_checkpoints(
         )
         lr_scheduler = PCEScheduler(
             optimizer=optimizer,
-            phase_epochs=[back_bone_epochs + ema_only_epochs, differentiable_epochs],
+            phase_epochs=[ema_only_epochs, differentiable_epochs],
             base_lr=lr,
             phase_multipliers=phase_multipliers
         )
@@ -249,7 +246,7 @@ def load_checkpoints(
     return phase, str_epoch, str_train_batch, str_val_batch, train_loss_history, val_loss_history, optimizer, lr_scheduler
 
 def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
-             back_bone_epochs, ema_only_epochs, differentiable_epochs, 
+             ema_only_epochs, differentiable_epochs, 
              lr, weight_decay, phase_multipliers, device, augmentation, class_names):
     """
     Training function
@@ -274,14 +271,13 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
     if isinstance(train_set, np.ndarray):
         train_set = torch.tensor(train_set, dtype=torch.float32)
     
-    phases = ['backbone', 'ema_only', 'diff']
+    phases = ['ema_only', 'diff']
 
     # Get all checkpoints if exists
     PCE = checkpointer.model_checkpoints(PCE)
     str_phase, str_epoch, str_train_batch, str_val_batch, train_loss_history, \
     val_loss_history, optimizer, lr_scheduler = \
-    load_checkpoints(checkpointer, PCE, lr, weight_decay, phase_multipliers,
-        back_bone_epochs, ema_only_epochs, differentiable_epochs)
+    load_checkpoints(checkpointer, PCE, lr, weight_decay, phase_multipliers, ema_only_epochs, differentiable_epochs)
 
     idx_last_phase = idx_str_phase = phases.index(str_phase)
 
@@ -297,43 +293,12 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
         if idx_actual_phase > idx_last_phase:
             get_trainable_params(PCE, phase)
         
-        if actual_phase == 'backbone':
+        if actual_phase == 'ema_only':
             if str_epoch == 0:
                 print('-- START Training Backbone ---')
                 PCE.initialize_router_key(train_set)
             else: 
                 print(f'--- RESUME Training backbone from {str_epoch} epoch')
-
-            logger_cb = BackboneLoggerCallBack(logger, str_epoch, 5)
-            lit_module = BackboneLitModule(
-                PCE,
-                lr_scheduler,
-                optimizer,
-                str_epoch,
-                str_train_batch,
-                str_val_batch,
-                train_loss_history,
-                val_loss_history,
-                augmentation,
-                lr,
-                weight_decay,
-                phase_multipliers,
-                actual_phase,
-                class_names,
-                device
-            )       
-            trainer = pl.Trainer(
-                max_epochs=back_bone_epochs,
-                logger = False,
-                callbacks=[logger_cb, checkpointer_cb],
-                precision='16-mixed',
-                gradient_clip_val=0.5,
-                gradient_clip_algorithm='norm',
-                accelerator=device,
-                num_sanity_val_steps=0,
-                enable_checkpointing= False,
-            )
-        if actual_phase == 'ema_only':
             logger_cb = EMADiffLitModule(logger, str_epoch, 5)
             lit_module = EMADiffLitModule(
                 PCE,
@@ -364,6 +329,12 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 enable_checkpointing= False,
             )
         if actual_phase == 'diff':
+            if str_phase != 'diff':
+                print("Trainable (requires_grad=True):", sum(p.numel() for p in PCE.parameters() if p.requires_grad))
+                print("Router trainable:", sum(p.numel() for p in PCE.router.parameters() if p.requires_grad))
+                print("Backbone trainable:", sum(p.numel() for p in PCE.parameters() if p.requires_grad) - sum(p.numel() for p in PCE.router.parameters() if p.requires_grad))
+                str_epoch = ema_only_epochs + 1
+
             logger_cb = EMADiffLitModule(logger, str_epoch, 5)
             lit_module = EMADiffLitModule(
                 PCE,
@@ -383,7 +354,7 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
                 device
             )
             trainer = pl.Trainer(
-                max_epochs=differentiable_epochs,
+                max_epochs=differentiable_epochs + ema_only_epochs,
                 logger = False,
                 callbacks=[logger_cb, checkpointer_cb],
                 precision='16-mixed',
@@ -425,17 +396,16 @@ if __name__ == "__main__":
     hard_threshold_router = False
 
     # Training metrics
-    back_bone_epochs = 50
     ema_only_epochs = 100
     differentiable_epochs = 100
-    total_epoch = back_bone_epochs + ema_only_epochs + differentiable_epochs
+    total_epoch = ema_only_epochs + differentiable_epochs
     phase_multipliers = [1.0, 0.3]
     batch_size = 32
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp}, k={kernel_size}, out_exp={out_channel_exp}, out_rout={out_channel_rout}, layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
     print(f"Router: ema={ema_alpha}, temp={router_temperature}, thresh={threshold}, hard={hard_threshold_router}")
-    print(f"Training: epochs={total_epoch} (Backbone epochs={back_bone_epochs}, ema only epochs={ema_only_epochs}), differentiable epochs = {differentiable_epochs}  \
+    print(f"Training: epochs={total_epoch} ema only epochs={ema_only_epochs}), differentiable epochs = {differentiable_epochs}  \
         phases={phase_multipliers}, batch={batch_size}\n")
     print('\n ------------------------ \n')
 
@@ -531,7 +501,6 @@ if __name__ == "__main__":
         val_loader=validation_loader,
         train_loader=train_loader,
         train_set=train_dataset,
-        back_bone_epochs=back_bone_epochs,
         ema_only_epochs=ema_only_epochs,
         differentiable_epochs=differentiable_epochs,
         lr=lr,
