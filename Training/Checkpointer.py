@@ -73,5 +73,5 @@ class Checkpointer:
             'optimizer': optimizer.state_dict(),
             'scheduler': lr_scheduler.state_dict(),
             'phase' : actual_phase
-        }, f'{self.check_point_dir}/backbone_checkpoints.pth')
+        }, f'{self.check_point_dir}/train_checkpoints.pth')
     

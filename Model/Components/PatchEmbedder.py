@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -18,7 +17,8 @@ class PatchEmbedder(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(128 * patch_size // 2 * patch_size // 2, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(256, embed_dim)
+            nn.Linear(256, embed_dim),
+            nn.LayerNorm(embed_dim)
         )
 
     def forward(self, X):

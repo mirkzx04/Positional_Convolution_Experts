@@ -220,7 +220,7 @@ def load_checkpoints(
         )
     else:
         phase = checkpoint['phase']
-        str_epoch = checkpoint['start_epochs']
+        str_epoch = checkpoint['start_epoch']
         str_train_batch = checkpoint['train_batch']
         str_val_batch = checkpoint['val_batch']
         train_loss_history = checkpoint['train_history']

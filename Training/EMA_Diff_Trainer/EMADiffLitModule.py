@@ -67,7 +67,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.weight_decay = weight_decay
 
         self.augmentation = augmentation
-        self.current_phase = actual_phase
+        self.actual_phase = actual_phase
 
         self.train_loss_history = []
         self.val_loss_history = []

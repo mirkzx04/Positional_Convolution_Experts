@@ -47,6 +47,9 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
+        self.pooler = nn.AdaptiveAvgPool2d(8)
+        self.flatten = nn.Flatten()
+
         self.hard_threshold_router = hard_threshold_router
 
         layer_info = self.create_layers(
@@ -147,7 +150,7 @@ class PCENetwork(nn.Module):
 
         return X_patches, X_patches_reshape, h_patches, w_patches
 
-    def get_exp_scores(self, X_patches_reshape,layer_idx, conv_proj, B, P, thresholds):
+    def get_exp_scores(self, X_patches_reshape,layer_idx, B, P, thresholds):
         """
         Get experts scores from router
 
@@ -159,14 +162,12 @@ class PCENetwork(nn.Module):
             exp_scores -> tensor (B, P, num_experts)
             where num_experts is the number of experts in the layer
         """
-
-        X_patches_proj = conv_proj(X_patches_reshape)
         # Enable cache metric if rqeusted
         if self.enable_router_metrics:
             self.router.enable_metrics_cache()
             
         # get experts scores
-        exp_scores = self.router(X_patches_proj, layer_idx, thresholds, self.hard_threshold_router)
+        exp_scores = self.router(X_patches_reshape, layer_idx, thresholds, self.hard_threshold_router)
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores
@@ -198,7 +199,6 @@ class PCENetwork(nn.Module):
         for layer_idx, layer in enumerate(self.layers):
             # Layer components
             experts = layer.experts
-            conv_proj = layer.conv_proj
             final_conv = layer.final_conv
             threshold = layer.threshold
             patch_size = layer.patch_size
@@ -211,11 +211,11 @@ class PCENetwork(nn.Module):
 
             # Take experts scores
             exp_scores = self.get_exp_scores(
-                X_patches_reshape, layer_idx, conv_proj, threshold, B, P
+                X_patches_reshape, layer_idx, threshold, B, P
             )
 
             # Applied all experts at batch
-            all_outputs = [experts(X_patches_reshape) for expert in experts]
+            all_outputs = [expert(X_patches_reshape) for expert in experts]
             all_outputs = torch.stack(all_outputs, dim = 0) # Shape : [num_experts, B*P, C_out, H_out, W_out]
 
             # Reshape [num_experts, B*P, C_out, H_out, W_out] -> [B, P, num_experts, C_out, H_out, W_out]
@@ -241,7 +241,8 @@ class PCENetwork(nn.Module):
 
         # Applying SSP at final experts output
         experts_output = X
-        experts_spp_output = self.router.ssp(experts_output)
-        logits = self.linear_layer(experts_spp_output)
+        experts_output_pooled = self.pooler(experts_output)
+        experts_output_flatten = self.flatten(experts_output_pooled)
+        logits = self.linear_layer(experts_output_flatten)
 
         return logits

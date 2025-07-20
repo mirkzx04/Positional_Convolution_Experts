@@ -20,12 +20,6 @@ class PCELayer(nn.Module):
             )
             for _ in range(num_experts)
         ])
-        self.conv_proj = nn.Conv2d(
-            in_channels=inpt_channel,
-            out_channels=36,
-            kernel_size=3,
-            padding=1,
-        )
         # self.final_conv = FinalConv(out_channel, out_channel)
         self.final_conv = nn.Conv2d(
             in_channels=out_channel,
