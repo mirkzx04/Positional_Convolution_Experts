@@ -36,17 +36,11 @@ class EMADiffLoggerCallBack(pl.Callback):
                 data_batch, true_labels = batch
                 
                 pred_labels = output['pred_labels'] if isinstance(output, dict) and 'pred_labels' in output else None
-                batch_class_loss = output['class_loss'] if isinstance(output, dict) and 'class_loss' in output else None
-                batch_router_loss = output['router_loss'] if isinstance(output, dict) and 'router_loss' in output else None
-                batch_total_loss = output['total_loss'] if isinstance(output, dict) and 'total_loss' in output else None
 
                 self.logger.log_backbone_metrics_to_wandb(
                     data_batch, 
                     true_labels, 
                     pred_labels, 
-                    batch_class_loss, 
-                    batch_router_loss, 
-                    batch_total_loss,
                     class_names=pl_module.class_names if hasattr(pl_module, 'class_names') else None,
                     num_images_to_log=10,
                     epoch=trainer.current_epoch,
@@ -62,16 +56,16 @@ class EMADiffLoggerCallBack(pl.Callback):
         avg_train_total_loss = getattr(pl_module, 'avg_train_total_loss', None)
         train_top1_acc = getattr(pl_module, 'train_top1_acc', None)
         train_top5_acc = getattr(pl_module, 'train_top5_acc', None)
-        avg_val_classification_loss = getattr(pl_module, 'avg_val_classification_loss', None)
-        avg_val_router_loss = getattr(pl_module, 'avg_val_router_loss', None)
-        avg_val_total_loss = getattr(pl_module, 'avg_val_total_loss', None)
+        avg_val_classification_loss = getattr(pl_module, 'avg_val_class_losses', None)
+        avg_val_router_loss = getattr(pl_module, 'avg_val_router_losses', None)
+        avg_val_total_loss = getattr(pl_module, 'avg_val_total_losses', None)
         val_top1_acc = getattr(pl_module, 'val_top1_acc', None)
         val_top5_acc = getattr(pl_module, 'val_top5_acc', None)
         lr = trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else 0
         epoch = trainer.current_epoch
         gradient_norm = getattr(pl_module, "gradient_norm", None)
         best_val_loss = getattr(pl_module, "best_val_loss", None)
-        router_metrics = output['router_metrics']
+        router_metrics = getattr(pl_module, 'routing_log')
 
         self.logger.log_train_metrics_to_wandb(
             avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,

@@ -158,7 +158,7 @@ class EMADiffLitModule(pl.LightningModule):
         }
 
     def on_after_backward(self):
-        self.gradient_norm = self.calculate_gradient_norm(self.model)
+        self.gradient_norm = self.calculate_gradient_norm()
     
     def on_train_epoch_start(self):
         self.accuracy_metrics['top1_train'].reset()
@@ -240,7 +240,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.accuracy_metrics['top1_val'].reset()
         self.accuracy_metrics['top5_val'].reset()
 
-    def on_validation_epoch_end(self):
+    def my_on_validation_epoch_end(self):
         """
         Called at the end of the validation epoch to compute and reset average losses and metrics.
 
@@ -254,17 +254,23 @@ class EMADiffLitModule(pl.LightningModule):
         self.avg_val_router_losses = torch.tensor(self.val_router_losses).mean().item()
         self.avg_val_total_losses = torch.tensor(self.val_total_losses).mean().item()
 
+        self.train_top1_acc = self.accuracy_metrics['top1_train'].compute().item() * 100
+        self.train_top5_acc = self.accuracy_metrics['top5_train'].compute().item() * 100
+
+        self.val_top1_acc = self.accuracy_metrics['top1_val'].compute().item() * 100
+        self.val_top5_acc = self.accuracy_metrics['top5_val'].compute().item() * 100
+
         self.val_class_losses.clear()
         self.val_router_losses.clear()
         self.val_total_losses.clear()
 
-        routing_metrics = self.combine_router_metrics(self.router_metrics, self.cache_metrics)
+        self.routing_log = self.combine_router_metrics(self.router_metrics, self.cache_metrics)
 
         if self.avg_val_total_losses < self.best_val_loss:
             self.best_val_loss = self.avg_val_total_losses
 
         return {
-            'router_metrics' : routing_metrics
+            'router_metrics' : self.routing_log
         }
 
     def configure_optimizers(self):
