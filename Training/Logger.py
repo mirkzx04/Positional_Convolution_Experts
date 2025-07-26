@@ -125,10 +125,35 @@ class Logger:
         wb.log(log_dict, step = epoch)
 
     def log_train_metrics_to_wandb(
-        self, avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
-        train_top5_acc, avg_val_classification_loss, avg_val_router_loss, 
-        avg_val_total_loss, val_top1_acc, val_top5_acc, lr, epoch, gradient_norm, 
-        best_val_loss, router_metrics_train, cache_metrics_train, router_metrics_val, cache_metrics_val
+            avg_train_class_loss,
+            avg_train_router_loss,
+            avg_train_total_loss,
+
+            train_confidence_loss,
+            train_collapse_loss,
+            train_patch_entropy,
+            train_cache,
+
+            train_top1_acc,
+            train_top5_acc,
+
+            avg_val_classification_loss,
+            avg_val_router_loss, 
+            avg_val_total_loss,
+
+            val_confidence_loss,
+            val_collapse_loss,
+            val_patch_entropy,
+            val_cache,
+
+            val_top1_acc,
+            val_top5_acc,
+
+            best_val_loss,
+            
+            lr,
+            epoch,
+            gradient_norm
         ):
         """
         Log train metrics to wandb
@@ -168,21 +193,44 @@ class Logger:
             'avg_train_class_loss': avg_train_class_loss,
             'avg_train_router_loss': avg_train_router_loss,
             'avg_train_total_loss': avg_train_total_loss,
+
+            'avg_train_confidence_loss' : train_confidence_loss,
+            'avg_train_collapse_loss' : train_collapse_loss,
+            'avg_train_patch_entropy' : train_patch_entropy,
+
             'train_top1_acc': train_top1_acc,
             'train_top5_acc' : train_top5_acc,
+
             'avg_val_classification_loss': avg_val_classification_loss,
             'avg_val_router_loss': avg_val_router_loss,
             'avg_val_total_loss': avg_val_total_loss,
+
+            'avg_val_confidence_loss' : val_confidence_loss,
+            'avg_val_collapse_loss' : val_collapse_loss,
+            'val_patch_entropy' : val_patch_entropy,
+
             'val_top1_acc': val_top1_acc,
             'val_top5_acc' : val_top5_acc,
+
             'lr': lr,
             'epoch': epoch,
             'gradient_norm': gradient_norm,
             'best_val_loss': best_val_loss,
-            'router_metrics_train' : router_metrics_train,
-            'cache_metrics_train' : cache_metrics_train,
-            'router_metrics_val' : router_metrics_val,
-            'cache_metrics_val' : cache_metrics_val,
+            
         }
+
+        log_dict.update({
+            f'train/layer_{layer_idx}/{key}_{stat_name}' : value
+            for layer_idx, metrics in train_cache.items()
+            for key, stat in metrics.items()
+            for stat_name, value in stat.items()
+        })
+
+        log_dict.update({
+            f"val/layer_{layer_idx}/{key}_{stat_name}": value
+            for layer_idx, metrics in val_cache.items()
+            for key, stat in metrics.items()
+            for stat_name, value in stat.items()
+        })
         
         wb.log(log_dict, step=epoch)
