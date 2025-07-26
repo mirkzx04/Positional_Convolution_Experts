@@ -21,7 +21,6 @@ class PCENetwork(nn.Module):
                     dropout,
                     num_classes,
                     hard_threshold_router = False,
-                    enable_router_metrics = True,
                  ):
         super().__init__()
 
@@ -41,7 +40,6 @@ class PCENetwork(nn.Module):
         """
 
         self.num_classes = num_classes
-        self.enable_router_metrics = enable_router_metrics
 
         self.patch_extractor = PatchExtractor(patch_size)
 
@@ -80,23 +78,36 @@ class PCENetwork(nn.Module):
         Returns:
             None
         """
+        def get_fourie_channel(F):
+            return 4 + 8 * F
+        
+        # Setting start parameters
         patch_size = self.patch_extractor.patch_size
-
+        fourier_freq = self.patch_extractor.num_frequencies
+        fourier_channel = get_fourie_channel(fourier_freq)
+        inpt_channel = 3
         out_channel = 8
+
         layer_info = []
         for l in range(layer_number):
-            layer_info.append({'in_channel': inpt_channel, 'out_channel' : out_channel, 'patch_size': patch_size, 'embedd_dim': 360})
+            embd_channel = inpt_channel + fourier_channel
+            layer_info.append({
+                'in_channel': inpt_channel, 
+                'out_channel' : out_channel, 
+                'patch_size': patch_size, 
+                'embedd_dim': 128})
 
             self.layers.append(PCELayer(
                 inpt_channel=inpt_channel,
                 out_channel=out_channel,
                 num_experts=num_experts,
                 dropout=dropout,
-                patch_size=patch_size
+                patch_size=patch_size,
+                fourie_freq=fourier_freq
             ))
             patch_size = patch_size - 3 if patch_size - 3 >= 8 else patch_size
 
-            inpt_channel = out_channel + 4   
+            inpt_channel = out_channel
 
             if l % 2 == 0:
                 out_channel *= 2 
@@ -111,29 +122,29 @@ class PCENetwork(nn.Module):
             X (torch.Tensor) : Training set 
         """
         for layer_idx, layer in enumerate(self.layers):
-            # Get patches
-            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, layer.patch_size)
+            # # Get patches
+            # X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, layer.patch_size)
 
-            # Check if X_patches_reshape has same channels as conv_proj
-            expected_in_channels = self.router.embedders[layer_idx].cnn[0].in_channels
-            current_channels = X_patches_reshape.shape[1]
-            if current_channels < expected_in_channels:
-                diff = expected_in_channels - current_channels
-                pad = torch.zeros(X_patches_reshape.size(0), diff, X_patches_reshape.size(2), X_patches_reshape.size(3),
-                                  device=X_patches_reshape.device, dtype=X_patches_reshape.dtype)
-                X_patches_reshape = torch.cat([X_patches_reshape, pad], dim = 1)
-            elif current_channels > expected_in_channels:
-                X_patches_reshape = X_patches_reshape[:, :expected_in_channels, :, :]
+            # # Check if X_patches_reshape has same channels as conv_proj
+            # expected_in_channels = self.router.embedders[layer_idx].cnn[0].in_channels
+            # current_channels = X_patches_reshape.shape[1]
+            # if current_channels < expected_in_channels:
+            #     diff = expected_in_channels - current_channels
+            #     pad = torch.zeros(X_patches_reshape.size(0), diff, X_patches_reshape.size(2), X_patches_reshape.size(3),
+            #                       device=X_patches_reshape.device, dtype=X_patches_reshape.dtype)
+            #     X_patches_reshape = torch.cat([X_patches_reshape, pad], dim = 1)
+            # elif current_channels > expected_in_channels:
+            #     X_patches_reshape = X_patches_reshape[:, :expected_in_channels, :, :]
 
-            self.router.initialize_keys(X_patches_reshape, layer_idx)
+            self.router.initialize_keys(None, layer_idx)
 
             # Recompose the patches into the original image
-            X = rearrange(
-                X_patches,
-                'b (h w) c ph pw -> b c (h ph) (w pw)',
-                h = h_patches,
-                w = w_patches
-            )
+            # X = rearrange(
+            #     X_patches,
+            #     'b (h w) c ph pw -> b c (h ph) (w pw)',
+            #     h = h_patches,
+            #     w = w_patches
+            # )
 
     def get_patches(self, X, patch_size):
         """
@@ -142,15 +153,21 @@ class PCENetwork(nn.Module):
         Args:
             X (torch.Tensor) : Tensor of shape [B, C, H, W]
         """
+        # Get patches
         self.patch_extractor.patch_size = patch_size
-        X_patches, h_patches, w_patches = self.patch_extractor(X)
-        B, P, C, pH, pW = X_patches.shape
+        X_patches, X_patches_coords, h_patches, w_patches = self.patch_extractor(X)
 
+        # Reshape X_patches
+        B, P, C, pH, pW = X_patches.shape
         X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
 
-        return X_patches, X_patches_reshape, h_patches, w_patches
+        # Reshape X_patcches_coords
+        B, P, C, pH, pW = X_patches_coords.shape
+        X_patches_coords_reshape = X_patches_coords.reshape(B*P, C, pH, pW)
 
-    def get_exp_scores(self, X_patches_reshape,layer_idx, B, P, thresholds):
+        return X_patches, X_patches_reshape, X_patches_coords_reshape, h_patches, w_patches
+
+    def get_exp_scores(self, X_patches_coords_reshape, layer_idx, B, P, thresholds):
         """
         Get experts scores from router
 
@@ -161,13 +178,9 @@ class PCENetwork(nn.Module):
         Returns:
             exp_scores -> tensor (B, P, num_experts)
             where num_experts is the number of experts in the layer
-        """
-        # Enable cache metric if rqeusted
-        if self.enable_router_metrics:
-            self.router.enable_metrics_cache()
-            
+        """ 
         # get experts scores
-        exp_scores = self.router(X_patches_reshape, layer_idx, thresholds, self.hard_threshold_router)
+        exp_scores = self.router(X_patches_coords_reshape, layer_idx, thresholds, self.hard_threshold_router)
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores
@@ -206,12 +219,13 @@ class PCENetwork(nn.Module):
             num_expert = len(experts)
 
             # Divides feature map / input img in patches
-            X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, patch_size)
+            X_patches, X_patches_reshape, X_patches_coords_reshape, h_patches, w_patches \
+            = self.get_patches(X, patch_size)
             B, P, _, _, _ = X_patches.shape
 
             # Take experts scores
             exp_scores = self.get_exp_scores(
-                X_patches_reshape, layer_idx, threshold, B, P
+                X_patches_coords_reshape, layer_idx, B, P, threshold
             )
 
             # Applied all experts at batch

@@ -10,7 +10,8 @@ class PCELayer(nn.Module):
                 out_channel,
                 num_experts,
                 dropout,
-                patch_size):
+                patch_size,
+                fourie_freq):
         super().__init__()
         self.experts = nn.ModuleList([
             ConvExpert(
@@ -30,3 +31,4 @@ class PCELayer(nn.Module):
 
         self.threhsold = nn.Parameter(torch.tensor(0.5, dtype=torch.float32, requires_grad=True))
         self.patch_size = patch_size
+        self.fourier_freq = fourie_freq

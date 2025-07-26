@@ -51,6 +51,9 @@ class EMADiffLoggerCallBack(pl.Callback):
         if self.str_epoch > trainer.current_epoch:
             return None
 
+        pl_module.my_on_train_epoch_end()
+        pl_module.my_on_validation_epoch_end()
+
         avg_train_class_loss = getattr(pl_module, 'avg_train_class_loss', None)
         avg_train_router_loss = getattr(pl_module, 'avg_train_router_loss', None)
         avg_train_total_loss = getattr(pl_module, 'avg_train_total_loss', None)
@@ -65,11 +68,14 @@ class EMADiffLoggerCallBack(pl.Callback):
         epoch = trainer.current_epoch
         gradient_norm = getattr(pl_module, "gradient_norm", None)
         best_val_loss = getattr(pl_module, "best_val_loss", None)
-        router_metrics = getattr(pl_module, 'routing_log')
+        router_metrics_train = getattr(pl_module, 'router_metrics_log_train', None)
+        cache_metrics_train = getattr(pl_module, 'cache_metrics_log_train', None)
+        router_metrics_val = getattr(pl_module, 'router_metrics_log_val', None)
+        cache_metrics_val = getattr(pl_module, 'cache_metrics_log_val', None)
 
         self.logger.log_train_metrics_to_wandb(
             avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
             train_top5_acc, avg_val_classification_loss, avg_val_router_loss, 
             avg_val_total_loss, val_top1_acc, val_top5_acc, lr, epoch, gradient_norm, 
-            best_val_loss, router_metrics
+            best_val_loss, router_metrics_train, cache_metrics_train, router_metrics_val, cache_metrics_val
         )

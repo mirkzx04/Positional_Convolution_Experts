@@ -80,6 +80,11 @@ class EMADiffLitModule(pl.LightningModule):
         self.val_router_losses = []
         self.val_total_losses = []
 
+        self.train_router_metrics_history = []
+        self.val_router_metrics_history = []
+        self.train_cache_metrics_history = []
+        self.val_cache_metrics_history = []
+
         self.best_val_loss = float('+inf')
 
         self.accuracy_metrics = {
@@ -92,7 +97,6 @@ class EMADiffLitModule(pl.LightningModule):
 
         self.confidence_weight = 0.01
         self.anticollapse = 0.001
-        self.router_metrics = False
 
         self.criterion = torch.nn.CrossEntropyLoss()
 
@@ -133,17 +137,18 @@ class EMADiffLitModule(pl.LightningModule):
         class_loss = self.criterion(logits, labels)
 
         # Compute router loss
-        router_loss_out = self.router_loss()
-        if isinstance(router_loss_out, tuple):
-            router_loss = router_loss_out[0]
-        else:
-            router_loss = router_loss_out
+        router_loss, router_metrics, cache_metrics = self.router_loss()
 
         total_loss = class_loss + router_loss
 
         self.train_class_losses.append(class_loss.item())
         self.train_router_losses.append(router_loss.item())
         self.train_total_losses.append(total_loss.item())
+
+        if router_metrics is not None:
+            self.train_router_metrics_history.append(router_metrics)
+        if cache_metrics is not None:
+            self.train_cache_metrics_history.append(cache_metrics)
 
         if len(self.class_names) >= 5:
             self.accuracy_metrics['top1_train'].update(logits, labels)
@@ -178,6 +183,8 @@ class EMADiffLitModule(pl.LightningModule):
         """
         if self.start_train_batch != 0:
             self.start_train_batch = 0
+
+        # Calc avg of training losses
         self.avg_train_class_losses = torch.tensor(self.train_class_losses).mean().item()
         self.avg_train_router_losses = torch.tensor(self.train_router_losses).mean().item()
         self.avg_train_total_losses = torch.tensor(self.train_total_losses).mean().item()
@@ -185,6 +192,8 @@ class EMADiffLitModule(pl.LightningModule):
         self.train_class_losses.clear()
         self.train_router_losses.clear()
         self.train_total_losses.clear()
+
+        self.router_metrics_log_train, self.cache_metrics_log_train = self.combine_router_metrics(True)
 
         return {
             'train_loss_history' : self.train_loss_history,
@@ -215,14 +224,18 @@ class EMADiffLitModule(pl.LightningModule):
         class_loss = self.criterion(logits, labels)
 
         # Compute router loss
-        self.router_metrics = True
-        router_loss, self.router_metrics, self.cache_metrics = self.router_loss()
+        router_loss, router_metrics, cache_metrics = self.router_loss()
         
-        total_loss = class_loss.item() + router_loss.item()
+        total_loss = class_loss + router_loss
 
         self.val_class_losses.append(class_loss.item())
         self.val_router_losses.append(router_loss.item())
         self.val_total_losses.append(total_loss.item())
+
+        if router_metrics is not None:
+            self.train_router_metrics_history.append(router_metrics)
+        if cache_metrics is not None:
+            self.train_cache_metrics_history.append(cache_metrics)
 
         if len(self.class_names)>= 5:
             self.accuracy_metrics['top1_val'].update(logits, labels)
@@ -264,7 +277,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.val_router_losses.clear()
         self.val_total_losses.clear()
 
-        self.routing_log = self.combine_router_metrics(self.router_metrics, self.cache_metrics)
+        self.router_metrics_log_val, self.cache_metrics_log_val = self.combine_router_metrics(False)
 
         if self.avg_val_total_losses < self.best_val_loss:
             self.best_val_loss = self.avg_val_total_losses
@@ -329,27 +342,24 @@ class EMADiffLitModule(pl.LightningModule):
         total_loss = total_loss = (self.confidence_weight * confidence_loss) + \
                 (self.anticollapse * collapse_loss) 
         
-        if self.router_metrics:
-            router_metrics = {
-                'router_loss/confidence_loss': confidence_loss.item(),
-                'router_loss/collapse_loss': collapse_loss.item(),
-                'router_loss/total_specialization_loss': total_loss.item(),
-                'router_loss/avg_patch_entropy': patch_entropies.mean().item(),
-                'router_loss/unused_experts_count': experts_unused.item(),
-                'router_loss/min_expert_usage': experts_usage.min().item(),
-                'router_loss/max_expert_usage': experts_usage.max().item(),
+        router_metrics = {
+            'router_loss/confidence_loss': confidence_loss.item(),
+            'router_loss/collapse_loss': collapse_loss.item(),
+            'router_loss/total_specialization_loss': total_loss.item(),
+            'router_loss/avg_patch_entropy': patch_entropies.mean().item(),
+            'router_loss/unused_experts_count': experts_unused.item(),
+            'router_loss/min_expert_usage': experts_usage.min().item(),
+            'router_loss/max_expert_usage': experts_usage.max().item(),
 
-                # 'router_loss/threshold_extreme_penalty': threshold_extreme_penalty.item(),
-                # 'router_loss/avg_adaptive_threshold': adaptive_threshold.mean().item(),
-                # 'router_loss/threshold_std': adaptive_threshold.std().item(),
-                # 'router_loss/threshold_range': (adaptive_threshold.max() - adaptive_threshold.min()).item(),
-            }
+            # 'router_loss/threshold_extreme_penalty': threshold_extreme_penalty.item(),
+            # 'router_loss/avg_adaptive_threshold': adaptive_threshold.mean().item(),
+            # 'router_loss/threshold_std': adaptive_threshold.std().item(),
+            # 'router_loss/threshold_range': (adaptive_threshold.max() - adaptive_threshold.min()).item(),
+        }
 
-            cache_metrics = self.calc_cache_metrics(metrics)
+        cache_metrics = self.calc_cache_metrics(metrics)
 
-            return total_loss, router_metrics, cache_metrics
-    
-        return total_loss
+        return total_loss, router_metrics, cache_metrics
     
     def calc_cache_metrics(self, metrics):
         """
@@ -385,8 +395,9 @@ class EMADiffLitModule(pl.LightningModule):
             else : 
                 cache_metrics[f'cache_{key}'] = value
         all_cache_metrics.append(cache_metrics)
+        return all_cache_metrics
 
-    def combine_router_metrics(self, cache_metrics, router_metrics):
+    def combine_router_metrics(self, training):
         """
         Combine cache and router metrics into a single dictionary.
 
@@ -397,20 +408,22 @@ class EMADiffLitModule(pl.LightningModule):
         Returns:
             dict: Combined metrics dictionary.
         """
-        combined_metrics = {}
-
-        if cache_metrics:
-            for key in cache_metrics[0].keys():
-                combined_metrics[key] = sum(m[key] for m in cache_metrics) / len(cache_metrics)
-
-        if router_metrics:
-            all_keys = set()
-            for m in cache_metrics:
-                all_keys.update(m.keys())
-            for key in all_keys:
-                values = [m[key] for m in router_metrics if key in m]
-                if values:
-                    combined_metrics[key] = sum(values) / len(values)
+        if training:
+            router_metrics_hist = self.train_router_metrics_history
+            cache_metrics_hist = self.train_cache_metrics_history
+        else:
+            router_metrics_hist = self.val_router_metrics_history
+            cache_metrics_hist = self.val_cache_metrics_history
         
-        self.router_metrics = False
-        return combined_metrics
+        if router_metrics_hist :
+            agg_router = {k : sum(d[k] for d in router_metrics_hist) \
+                        / len(router_metrics_hist) for k in router_metrics_hist[0]}
+        
+        if cache_metrics_hist:
+            agg_cache = {k : sum(d[k] for d in cache_metrics_hist) / len(cache_metrics_hist) \
+                         for k in cache_metrics_hist[0]}
+        
+        router_metrics_hist.clear()
+        cache_metrics_hist.clear()
+        
+        return agg_router, agg_cache

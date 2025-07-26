@@ -128,7 +128,7 @@ class Logger:
         self, avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
         train_top5_acc, avg_val_classification_loss, avg_val_router_loss, 
         avg_val_total_loss, val_top1_acc, val_top5_acc, lr, epoch, gradient_norm, 
-        best_val_loss, router_metrics
+        best_val_loss, router_metrics_train, cache_metrics_train, router_metrics_val, cache_metrics_val
         ):
         """
         Log train metrics to wandb
@@ -179,10 +179,10 @@ class Logger:
             'epoch': epoch,
             'gradient_norm': gradient_norm,
             'best_val_loss': best_val_loss,
+            'router_metrics_train' : router_metrics_train,
+            'cache_metrics_train' : cache_metrics_train,
+            'router_metrics_val' : router_metrics_val,
+            'cache_metrics_val' : cache_metrics_val,
         }
-
-        # Adding router metrics if avaible
-        if router_metrics:
-            log_dict.update(router_metrics)
         
         wb.log(log_dict, step=epoch)

@@ -177,11 +177,11 @@ def get_trainable_params(PCE, phase):
         PCE : (nn.Module) is a models
         phase (string) : string that rappresents current phase
     """
-    if phase == 'ema_only':
-        for p in PCE.router.parameters() : p.requires_grad = True
-        for key in PCE.router.keys : key.requires_grad = False
-    elif phase == 'deff':
-        for key in PCE.router.keys : key.requires_grad = True
+    # if phase == 'ema_only':
+    #     for p in PCE.router.parameters() : p.requires_grad = True
+    #     for key in PCE.router.keys : key.requires_grad = False
+    # elif phase == 'deff':
+    #     for key in PCE.router.keys : key.requires_grad = True
 
 def load_checkpoints(
         checkpointer, PCE, lr, weight_decay, phase_multipliers,
@@ -288,13 +288,13 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
         actual_phase = phases[phase]
         idx_actual_phase = phases.index(actual_phase)
 
-        if idx_actual_phase > idx_last_phase:
-            get_trainable_params(PCE, phase)
+        # if idx_actual_phase > idx_last_phase:
+        #     get_trainable_params(PCE, phase)
         
         if actual_phase == 'ema_only':
             if str_epoch == 0:
                 print('-- START Training | Initialize keys ---')
-                PCE.initialize_keys(train_set)
+                PCE.initialize_keys(train_set[:10000])
             else: 
                 print(f'--- RESUME Training from {str_epoch} epoch')
             logger_cb = EMADiffLoggerCallBack(logger, str_epoch, 5)
@@ -328,9 +328,6 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
             )
         if actual_phase == 'diff':
             if str_phase != 'diff':
-                print("Trainable (requires_grad=True):", sum(p.numel() for p in PCE.parameters() if p.requires_grad))
-                print("Router trainable:", sum(p.numel() for p in PCE.router.parameters() if p.requires_grad))
-                print("Backbone trainable:", sum(p.numel() for p in PCE.parameters() if p.requires_grad) - sum(p.numel() for p in PCE.router.parameters() if p.requires_grad))
                 str_epoch = ema_only_epochs + 1
 
             logger_cb = EMADiffLoggerCallBack(logger, str_epoch, 5)
@@ -364,8 +361,6 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
             )
         
         trainer.fit(lit_module, train_loader, val_loader)
-        if actual_phase != 'diff':
-            PCE.initialize_keys(train_set)
         idx_last_phase = idx_actual_phase
 
 if __name__ == "__main__":
