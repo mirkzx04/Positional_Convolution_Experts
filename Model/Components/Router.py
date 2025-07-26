@@ -10,7 +10,7 @@ from torch import nn
 from .PatchEmbedder import PatchEmbedder
 
 class Router(nn.Module):
-    def __init__(self,num_experts, num_layers, pce_layer_info, ema_alpha=0.9):
+    def __init__(self,num_experts, num_layers, embed_dim, pce_layer_info, ema_alpha=0.9):
         super().__init__()
         """
         Router constructor
@@ -27,12 +27,12 @@ class Router(nn.Module):
         self.ema_alpha = ema_alpha
 
         self.layers_cache = []
-        self.cache_enabled = False
+        self.cache_enabled = True
 
-        self.embedding_dim = pce_layer_info['embedd_dim']
+        self.embedding_dim = embed_dim 
         
         self.embedders = nn.ModuleList([
-            PatchEmbedder(info['in_channel'], info['patch_size'], info['embedd_dim']) 
+            PatchEmbedder(info['embd_channel'], info['patch_size'], info['embedd_dim']) 
             for info in pce_layer_info
         ])
 
@@ -206,8 +206,8 @@ class Router(nn.Module):
 
             nn.init.orthogonal_(base)
             key = base[:4]
-            keys += 0.05 * torch.rand_like(key)
-            self.keys[layer_idx].data.copy_(keys)
+            key += 0.05 * torch.rand_like(key)
+            self.keys[layer_idx].data.copy_(key)
 
     def ema(self, patch_embedding, weights, layer_idx):
         """

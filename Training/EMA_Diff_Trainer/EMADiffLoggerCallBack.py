@@ -47,7 +47,7 @@ class EMADiffLoggerCallBack(pl.Callback):
                     phase='train_backbone'
                 ) 
     
-    def on_validation_epoch_end(self, trainer, pl_module, output):
+    def on_validation_epoch_end(self, trainer, pl_module):
         if self.str_epoch > trainer.current_epoch:
             return None
 

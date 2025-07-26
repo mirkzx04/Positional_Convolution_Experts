@@ -2,8 +2,8 @@ import torch
 
 from torch import nn
 
-from ConvExpert import ConvExpert
-from FinalConv import FinalConv
+from .ConvExpert import ConvExpert
+from .FinalConv import FinalConv
 class PCELayer(nn.Module):
     def __init__(self,
                 inpt_channel,

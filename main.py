@@ -177,11 +177,11 @@ def get_trainable_params(PCE, phase):
         PCE : (nn.Module) is a models
         phase (string) : string that rappresents current phase
     """
-    # if phase == 'ema_only':
-    #     for p in PCE.router.parameters() : p.requires_grad = True
-    #     for key in PCE.router.keys : key.requires_grad = False
-    # elif phase == 'deff':
-    #     for key in PCE.router.keys : key.requires_grad = True
+    if phase == 'ema_only':
+        for p in PCE.router.parameters() : p.requires_grad = True
+        for key in PCE.router.keys : key.requires_grad = False
+    elif phase == 'deff':
+        for key in PCE.router.keys : key.requires_grad = True
 
 def load_checkpoints(
         checkpointer, PCE, lr, weight_decay, phase_multipliers,
@@ -288,8 +288,8 @@ def training(logger, checkpointer, PCE, val_loader, train_loader, train_set,
         actual_phase = phases[phase]
         idx_actual_phase = phases.index(actual_phase)
 
-        # if idx_actual_phase > idx_last_phase:
-        #     get_trainable_params(PCE, phase)
+        if idx_actual_phase > idx_last_phase:
+            get_trainable_params(PCE, phase)
         
         if actual_phase == 'ema_only':
             if str_epoch == 0:
@@ -445,20 +445,15 @@ if __name__ == "__main__":
     print(f'--- Dataset loaded --- \n')
 
     print('--- Loading router and model ---')
-    # Divides current dataset in patch for initialize keys and setting input channel for model
-    dataset_patch, _, _ = patch_extractor(train_dataset.data)  # Extract patches 
-    _, _, C, _, _ = dataset_patch.shape
 
     # Initialize model, optimizer (Adam) and scheduler
     # Loss initialize in training funcion (CrossEntropy)
     PCE = PCENetwork(
-        inpt_channel= C,
         num_experts = num_exp,
         layer_number = layer_number,
         patch_size = patch_size,
         dropout=0.1,
         num_classes=num_classes,
-        enable_router_metrics=True,
         hard_threshold_router = False,
     )
     

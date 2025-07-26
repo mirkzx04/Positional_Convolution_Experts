@@ -199,7 +199,7 @@ class EMADiffLitModule(pl.LightningModule):
         # Calc router losses
         self.avg_train_confidence_loss = torch.tensor(self.train_confidence_loss_history).mean().item()
         self.avg_train_collapse_loss = torch.tensor(self.train_collapse_loss_history).mean().item()
-        self.avg_train_patch_entropys = torch.tensor(self.train_entropy_history).mean().item()
+        self.avg_train_patch_entropys = torch.cat(self.train_entropy_history).mean().item()
 
         self.train_confidence_loss_history.clear(), self.train_collapse_loss_history.clear(), self.train_entropy_history.clear()
 
@@ -280,7 +280,7 @@ class EMADiffLitModule(pl.LightningModule):
         # Calc router losses
         self.avg_val_confidence_loss = torch.tensor(self.val_confidence_loss_history).mean().item()
         self.avg_val_collapse_loss = torch.tensor(self.val_collapse_loss_history).mean().item()
-        self.avg_val_patch_entropys = torch.tensor(self.val_entropy_history).mean().item()
+        self.avg_val_patch_entropys = torch.cat(self.val_entropy_history).mean().item()
 
         self.val_confidence_loss_history.clear(), self.val_collapse_loss_history.clear(), self.val_entropy_history.clear()
 
@@ -330,9 +330,9 @@ class EMADiffLitModule(pl.LightningModule):
         if not router_cache:
             return torch.tensor(0.0, requires_grad=True)
         
-        for layer_idx in len(router_cache):
+        for layer_idx in range(len(router_cache)):
             # Get experts weights [B x P, num_experts]
-            expert_weights = router_cache[layer_idx]['weights/weights_raw']
+            expert_weights = router_cache[layer_idx]['weights']
 
             # Confidence loss : encourage shar distributions per patch
             # We use entropy : Highet entropy = less confident, low entropy = more confident

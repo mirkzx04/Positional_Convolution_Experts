@@ -20,6 +20,7 @@ class PCENetwork(nn.Module):
                     patch_size,
                     dropout,
                     num_classes,
+                    embed_dim,
                     hard_threshold_router = False,
                  ):
         super().__init__()
@@ -55,17 +56,19 @@ class PCENetwork(nn.Module):
             num_experts=num_experts,
             dropout=dropout,
             layer_number=layer_number,
+            embed_dim = embed_dim
         )        
 
         self.router = Router(
             num_experts=num_experts,
             num_layers=layer_number,
-            pce_layer_info = layer_info
+            pce_layer_info = layer_info,
+            embed_dim=embed_dim
         )
 
         self.linear_layer = LazyLinear(self.num_classes)
 
-    def create_layers(self, inpt_channel, num_experts, dropout, layer_number):
+    def create_layers(self, num_experts, dropout, layer_number, embed_dim):
         """
         Create layers of PCE Network
 
@@ -92,10 +95,10 @@ class PCENetwork(nn.Module):
         for l in range(layer_number):
             embd_channel = inpt_channel + fourier_channel
             layer_info.append({
-                'in_channel': inpt_channel, 
+                'embd_channel': embd_channel, 
                 'out_channel' : out_channel, 
                 'patch_size': patch_size, 
-                'embedd_dim': 128})
+                'embedd_dim': embed_dim})
 
             self.layers.append(PCELayer(
                 inpt_channel=inpt_channel,
@@ -213,7 +216,7 @@ class PCENetwork(nn.Module):
             # Layer components
             experts = layer.experts
             final_conv = layer.final_conv
-            threshold = layer.threshold
+            threshold = layer.threhsold
             patch_size = layer.patch_size
 
             num_expert = len(experts)
