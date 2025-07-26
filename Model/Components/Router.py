@@ -26,8 +26,10 @@ class Router(nn.Module):
         self.num_experts = num_experts
         self.ema_alpha = ema_alpha
 
-        self.last_forward_cache = None
+        self.layers_cache = []
         self.cache_enabled = False
+
+        self.embedding_dim = pce_layer_info['embedd_dim']
         
         self.embedders = nn.ModuleList([
             PatchEmbedder(info['in_channel'], info['patch_size'], info['embedd_dim']) 
@@ -51,20 +53,6 @@ class Router(nn.Module):
         self.wth_max_c = nn.Parameter(torch.tensor(0.4, dtype=torch.float32), requires_grad=True) 
         self.wth_entropy_c = nn.Parameter(torch.tensor(0.3, dtype=torch.float32), requires_grad=True)
         self.wth_gap_c = nn.Parameter(torch.tensor(0.3, dtype=torch.float32), requires_grad=True)
-
-    def enable_metrics_cache(self):
-        """
-        Enable caching of the metrics during forward
-        """
-        self.cache_enabled = True
-
-    def disable_metrics_cache(self):
-        """
-        Disable caching of the metrics for training
-        """ 
-
-        self.cache_enabled = False
-        self.last_forward_cache = None
 
     def set_keys_trainable(self, trainable = False):
         if trainable:
@@ -151,14 +139,15 @@ class Router(nn.Module):
             weights -> Tensor (B x nP, num_experts)
             where B is batch size, nP is number of patches, num_experts is number of experts in layer
         """
-        patch_emb = self.embedders[layer_idx](patch)
-
+        emb = self.embedders[layer_idx](patch)
+        key = F.normalize(self.keys[layer_idx], dim = -1)
         # Compute cosine simlarity between patch embedding and keys
-        logits = patch_emb @ self.keys[layer_idx].T
-        scaled_logits = logits * self.logit_temp
+        logit = emb @ key.T
+        logit /= (emb.shape[-1])**0.5
+        # cosine_scaled = cosine * self.logit_temp
 
         # Calc softmax weights and applied threshold
-        weights = F.softmax(scaled_logits, dim=-1)
+        weights = F.softmax(logit * self.logit_temp, dim=-1)
         
         # Compute adaptive threshold
         # adaptive_threshold = self.compute_adaptive_threshold(weights=weights, base_threshold=threshold)
@@ -176,24 +165,21 @@ class Router(nn.Module):
         #     weights_filtered = weights * hard_mask
 
         # Normalize weights
-        sum_weights = weights.sum(dim=-1, keepdim=True)
-        weights = weights / torch.clamp(sum_weights, min = 1e-8)
+        # sum_weights = weights.sum(dim=-1, keepdim=True)
+        # weights = weights / torch.clamp(sum_weights, min = 1e-8)
 
+        # Save cache
         if self.cache_enabled:
-            self.last_forward_cache = {
-                'patch/patch_embeddings': patch_emb.detach(),
-                'ccosine/osine_similarities': logits.detach(),
-                'weights/weights_raw': weights,
-                # 'weights_filtered': weights_filtered.detach(),
-                # 'base_threshold': threshold,  
-                # 'adaptive_threshold': adaptive_threshold.detach(),
-                # 'hard_threshold_used': hard_threshold,
-                'logits/logits':logits.detach(),
-                'scaled_logits/scaled_logits': scaled_logits.detach(),
-            }
+            self.layers_cache.append({
+                'embedding' : emb,
+                'logits' : logit,
+                'weights' : weights,
+                'keys' : key
+            })
+
         if self.keys[layer_idx].requires_grad == False:
             # Update keys with exponential moving average
-            self.ema(patch_emb, weights, layer_idx)
+            self.ema(emb, weights, layer_idx)
 
         return weights
 
@@ -216,15 +202,12 @@ class Router(nn.Module):
         """
 
         with torch.no_grad():
-            patch_emb = self.embedders[layer_idx](patches)
+            base = torch.empty(self.embedding_dim, self.embedding_dim)
 
-            # Initialize KMeans and fit for get centroids
-            kmeans = KMeans(n_clusters = self.num_experts, n_init = 'auto', random_state = 42)
-            kmeans.fit(patch_emb.detach().cpu().numpy())
-            centroids = torch.tensor(kmeans.cluster_centers_, device=patch_emb.device)
-            centroids = F.normalize(centroids, dim = -1)
-
-            self.keys[layer_idx].data.copy_(centroids)
+            nn.init.orthogonal_(base)
+            key = base[:4]
+            keys += 0.05 * torch.rand_like(key)
+            self.keys[layer_idx].data.copy_(keys)
 
     def ema(self, patch_embedding, weights, layer_idx):
         """
@@ -245,12 +228,20 @@ class Router(nn.Module):
             denom = w_t.sum(dim=1, keepdim = True) + 1e-8
             centroids = (w_t @ patch_embedding) / denom
 
-            # Normalize centroids
-            centroids = F.normalize(centroids, dim = -1)
-
             # Update all keys 
             self.keys[layer_idx].data.mul_(self.ema_alpha).add_(
                 centroids * (1.0 - self.ema_alpha)
             )
 
-            self.keys[layer_idx].data = F.normalize(self.keys[layer_idx].data, dim = -1)
+    def enable_cache(self):
+        self.cache_enabled = True
+
+    def disable_cache(self):
+        self.cache_enabled = False
+        self.layers_cache = None
+
+    def clear_cache(self):
+        self.layers_cache.clear()
+
+    def get_cache(self):
+        return self.layers_cache

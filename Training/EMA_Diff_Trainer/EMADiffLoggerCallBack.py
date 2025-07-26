@@ -54,28 +54,66 @@ class EMADiffLoggerCallBack(pl.Callback):
         pl_module.my_on_train_epoch_end()
         pl_module.my_on_validation_epoch_end()
 
+        # Training Log
         avg_train_class_loss = getattr(pl_module, 'avg_train_class_loss', None)
         avg_train_router_loss = getattr(pl_module, 'avg_train_router_loss', None)
         avg_train_total_loss = getattr(pl_module, 'avg_train_total_loss', None)
+        # Router
+        train_confidence_loss = getattr(pl_module, 'avg_train_confidence_loss')
+        train_collapse_loss = getattr(pl_module, 'avg_train_collapse_loss')
+        train_patch_entropy = getattr(pl_module, 'avg_train_patch_entropys')
+        train_cache = getattr(pl_module, 'train_cache_stats')
+        # Accuracy
         train_top1_acc = getattr(pl_module, 'train_top1_acc', None)
         train_top5_acc = getattr(pl_module, 'train_top5_acc', None)
+
+        # Validation los
         avg_val_classification_loss = getattr(pl_module, 'avg_val_class_losses', None)
         avg_val_router_loss = getattr(pl_module, 'avg_val_router_losses', None)
         avg_val_total_loss = getattr(pl_module, 'avg_val_total_losses', None)
+        # Router
+        val_confidence_loss = getattr(pl_module, 'avg_val_confidence_loss')
+        val_collapse_loss = getattr(pl_module, 'avg_val_collapse_loss')
+        val_patch_entropy = getattr(pl_module, 'avg_val_patch_entropys')
+        val_cache_stats = getattr(pl_module, 'val_cache_stats')
+        # Accuracy
         val_top1_acc = getattr(pl_module, 'val_top1_acc', None)
         val_top5_acc = getattr(pl_module, 'val_top5_acc', None)
+        # Best validation Loss
+        best_val_loss = getattr(pl_module, "best_val_loss", None)
+
         lr = trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else 0
         epoch = trainer.current_epoch
         gradient_norm = getattr(pl_module, "gradient_norm", None)
-        best_val_loss = getattr(pl_module, "best_val_loss", None)
-        router_metrics_train = getattr(pl_module, 'router_metrics_log_train', None)
-        cache_metrics_train = getattr(pl_module, 'cache_metrics_log_train', None)
-        router_metrics_val = getattr(pl_module, 'router_metrics_log_val', None)
-        cache_metrics_val = getattr(pl_module, 'cache_metrics_log_val', None)
-
+        
         self.logger.log_train_metrics_to_wandb(
-            avg_train_class_loss, avg_train_router_loss, avg_train_total_loss, train_top1_acc,
-            train_top5_acc, avg_val_classification_loss, avg_val_router_loss, 
-            avg_val_total_loss, val_top1_acc, val_top5_acc, lr, epoch, gradient_norm, 
-            best_val_loss, router_metrics_train, cache_metrics_train, router_metrics_val, cache_metrics_val
+            avg_train_class_loss,
+            avg_train_router_loss,
+            avg_train_total_loss,
+
+            train_confidence_loss,
+            train_collapse_loss,
+            train_patch_entropy,
+            train_cache,
+
+            train_top1_acc,
+            train_top5_acc,
+
+            avg_val_classification_loss,
+            avg_val_router_loss, 
+            avg_val_total_loss,
+
+            val_confidence_loss,
+            val_collapse_loss,
+            val_patch_entropy,
+            val_cache_stats,
+
+            val_top1_acc,
+            val_top5_acc,
+
+            best_val_loss,
+            
+            lr,
+            epoch,
+            gradient_norm
         )
