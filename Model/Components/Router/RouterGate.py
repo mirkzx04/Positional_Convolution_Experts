@@ -9,7 +9,9 @@ class RouterGate(nn.Module):
         flatten_size = in_channel * patch_size * patch_size
 
         self.mlp = nn.Sequential(
-            nn.Linear(flatten_size, embed_dim)
+            nn.Linear(flatten_size, 512),
+            nn.GELU(),
+            nn.Linear(512, num_experts)
         )
 
 
