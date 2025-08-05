@@ -29,6 +29,6 @@ class PCELayer(nn.Module):
             kernel_size=1
         )
 
-        self.threhsold = nn.Parameter(torch.tensor(0.5, dtype=torch.float32, requires_grad=True))
+        self.threshold = nn.Parameter(torch.tensor(0.5, dtype=torch.float32, requires_grad=True))
         self.patch_size = patch_size
         self.fourier_freq = fourie_freq

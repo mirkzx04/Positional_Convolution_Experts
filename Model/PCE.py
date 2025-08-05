@@ -14,14 +14,14 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 
 class PCENetwork(nn.Module):
     def __init__(self, 
-                    inpt_channel,
                     num_experts,
                     layer_number,
                     patch_size,
                     dropout,
                     num_classes,
                     embed_dim,
-                    hard_threshold_router = False,
+                    threshold,
+                    temp
                  ):
         super().__init__()
 
@@ -49,26 +49,24 @@ class PCENetwork(nn.Module):
         self.pooler = nn.AdaptiveAvgPool2d(8)
         self.flatten = nn.Flatten()
 
-        self.hard_threshold_router = hard_threshold_router
-
         layer_info = self.create_layers(
-            inpt_channel=inpt_channel, # Start channel (3 or 2) + 4 of positional information
             num_experts=num_experts,
             dropout=dropout,
             layer_number=layer_number,
-            embed_dim = embed_dim
+            embed_dim = embed_dim,
+            threshold = threshold
         )        
 
         self.router = Router(
             num_experts=num_experts,
             num_layers=layer_number,
             pce_layer_info = layer_info,
-            embed_dim=embed_dim
+            temp = temp
         )
 
         self.linear_layer = LazyLinear(self.num_classes)
 
-    def create_layers(self, num_experts, dropout, layer_number, embed_dim):
+    def create_layers(self, num_experts, dropout, layer_number, embed_dim, threshold):
         """
         Create layers of PCE Network
 
@@ -94,11 +92,10 @@ class PCENetwork(nn.Module):
         layer_info = []
         for l in range(layer_number):
             embd_channel = inpt_channel + fourier_channel
-            layer_info.append({
-                'embd_channel': embd_channel, 
-                'out_channel' : out_channel, 
-                'patch_size': patch_size, 
-                'embedd_dim': embed_dim})
+            layer_info.append((
+                out_channel, patch_size
+                )
+            )
 
             self.layers.append(PCELayer(
                 inpt_channel=inpt_channel,
@@ -106,9 +103,10 @@ class PCENetwork(nn.Module):
                 num_experts=num_experts,
                 dropout=dropout,
                 patch_size=patch_size,
-                fourie_freq=fourier_freq
+                fourie_freq=fourier_freq,
+                threshold = threshold
             ))
-            patch_size = patch_size - 3 if patch_size - 3 >= 8 else patch_size
+            patch_size = patch_size - 2 if patch_size - 2 >= 8 else patch_size
 
             inpt_channel = out_channel
 
@@ -117,38 +115,6 @@ class PCENetwork(nn.Module):
 
         return layer_info
     
-    def initialize_keys(self, X):
-        """
-        Initialize router keys with projection convolution
-
-        Args:
-            X (torch.Tensor) : Training set 
-        """
-        for layer_idx, layer in enumerate(self.layers):
-            # # Get patches
-            # X_patches, X_patches_reshape, h_patches, w_patches = self.get_patches(X, layer.patch_size)
-
-            # # Check if X_patches_reshape has same channels as conv_proj
-            # expected_in_channels = self.router.embedders[layer_idx].cnn[0].in_channels
-            # current_channels = X_patches_reshape.shape[1]
-            # if current_channels < expected_in_channels:
-            #     diff = expected_in_channels - current_channels
-            #     pad = torch.zeros(X_patches_reshape.size(0), diff, X_patches_reshape.size(2), X_patches_reshape.size(3),
-            #                       device=X_patches_reshape.device, dtype=X_patches_reshape.dtype)
-            #     X_patches_reshape = torch.cat([X_patches_reshape, pad], dim = 1)
-            # elif current_channels > expected_in_channels:
-            #     X_patches_reshape = X_patches_reshape[:, :expected_in_channels, :, :]
-
-            self.router.initialize_keys(None, layer_idx)
-
-            # Recompose the patches into the original image
-            # X = rearrange(
-            #     X_patches,
-            #     'b (h w) c ph pw -> b c (h ph) (w pw)',
-            #     h = h_patches,
-            #     w = w_patches
-            # )
-
     def get_patches(self, X, patch_size):
         """
         Get patches and patches information
@@ -170,7 +136,7 @@ class PCENetwork(nn.Module):
 
         return X_patches, X_patches_reshape, X_patches_coords_reshape, h_patches, w_patches
 
-    def get_exp_scores(self, X_patches_coords_reshape, layer_idx, B, P, thresholds):
+    def get_exp_scores(self, X_patches_coords_reshape, layer_idx, B, P, thresholds, current_epoch):
         """
         Get experts scores from router
 
@@ -183,17 +149,18 @@ class PCENetwork(nn.Module):
             where num_experts is the number of experts in the layer
         """ 
         # get experts scores
-        exp_scores = self.router(X_patches_coords_reshape, layer_idx, thresholds, self.hard_threshold_router)
+        exp_scores = self.router(X_patches_coords_reshape, layer_idx, thresholds, current_epoch)
         exp_scores = exp_scores.reshape(B, P, -1)
 
         return exp_scores
 
-    def forward(self, X):
+    def forward(self, X, current_epoch=None):
         """
         Forward method of PCE Network
 
         Args :
             X (torch.tensor) -> input of network, tensor.shape = (B,C,H,W)
+            current_epoch (int) -> current training epoch, used to determine routing strategy
 
         Pipeline of PCE Network:
             1. Divide input img/feature map in patches
@@ -216,7 +183,7 @@ class PCENetwork(nn.Module):
             # Layer components
             experts = layer.experts
             final_conv = layer.final_conv
-            threshold = layer.threhsold
+            threshold = layer.threshold
             patch_size = layer.patch_size
 
             num_expert = len(experts)
@@ -228,7 +195,7 @@ class PCENetwork(nn.Module):
 
             # Take experts scores
             exp_scores = self.get_exp_scores(
-                X_patches_coords_reshape, layer_idx, B, P, threshold
+                X_patches_coords_reshape, layer_idx, B, P, threshold, current_epoch
             )
 
             # Applied all experts at batch
@@ -252,7 +219,6 @@ class PCENetwork(nn.Module):
                 h = h_patches,
                 w = w_patches
             )
-            output = final_conv(output)
 
             X = output
 
