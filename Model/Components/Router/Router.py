@@ -10,7 +10,7 @@ from torch import nn
 from .RouterGate import RouterGate
 
 class Router(nn.Module):
-    def __init__(self,num_experts, num_layers, pce_layer_info, temp):
+    def __init__(self,num_experts, num_layers, pce_layer_info):
         super().__init__()
         """
         Router constructor
@@ -28,13 +28,12 @@ class Router(nn.Module):
         self.layers_cache = []
         self.cache_enabled = True
         
-        self.getes = nn.ModuleList([
+        self.gates = nn.ModuleList([
             RouterGate(info[0], info[1], num_experts) 
             for info in pce_layer_info
         ])
 
         # Set parameters of adaptive threshold
-        self.logit_temp = temp
         self.mask_beta = nn.Parameter(torch.tensor(10., dtype=torch.float32), requires_grad=True)
         self.min_experts_active = max(1, 
             num_experts // 2 if num_experts <= 4 
@@ -125,7 +124,7 @@ class Router(nn.Module):
             weights -> Tensor (B x nP, num_experts)
             where B is batch size, nP is number of patches, num_experts is number of experts in layer
         """
-        logits = self.getes[layer_idx](patch)
+        logits = self.gates[layer_idx](patch)
 
         # Compute softmax weights
         weights = F.softmax(logits, dim=-1) 

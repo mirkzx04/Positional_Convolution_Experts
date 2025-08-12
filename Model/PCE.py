@@ -21,7 +21,6 @@ class PCENetwork(nn.Module):
                     num_classes,
                     embed_dim,
                     threshold,
-                    temp
                  ):
         super().__init__()
 
@@ -53,7 +52,6 @@ class PCENetwork(nn.Module):
             num_experts=num_experts,
             dropout=dropout,
             layer_number=layer_number,
-            embed_dim = embed_dim,
             threshold = threshold
         )        
 
@@ -61,12 +59,11 @@ class PCENetwork(nn.Module):
             num_experts=num_experts,
             num_layers=layer_number,
             pce_layer_info = layer_info,
-            temp = temp
         )
 
         self.linear_layer = LazyLinear(self.num_classes)
 
-    def create_layers(self, num_experts, dropout, layer_number, embed_dim, threshold):
+    def create_layers(self, num_experts, dropout, layer_number, threshold):
         """
         Create layers of PCE Network
 
@@ -91,12 +88,13 @@ class PCENetwork(nn.Module):
 
         layer_info = []
         for l in range(layer_number):
-            embd_channel = inpt_channel + fourier_channel
+            # Gate channel is the sum of input channel and fourier channel
+            gate_channel = inpt_channel + fourier_channel
             layer_info.append((
-                out_channel, patch_size
+                gate_channel, patch_size
                 )
             )
-
+            # Create PCE Layer
             self.layers.append(PCELayer(
                 inpt_channel=inpt_channel,
                 out_channel=out_channel,
@@ -106,10 +104,14 @@ class PCENetwork(nn.Module):
                 fourie_freq=fourier_freq,
                 threshold = threshold
             ))
+
+            # Update patch size
             patch_size = patch_size - 2 if patch_size - 2 >= 8 else patch_size
 
+            # Update input channel
             inpt_channel = out_channel
 
+            # Update output channel
             if l % 2 == 0:
                 out_channel *= 2 
 

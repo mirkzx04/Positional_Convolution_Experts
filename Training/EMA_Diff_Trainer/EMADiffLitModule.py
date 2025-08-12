@@ -155,7 +155,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.train_class_losses.append(class_loss.item())
 
         # Compute router loss
-        if self.current_epoch >= 20:
+        if self.current_epoch >= 30:
             # Get router cache
             router_cache = self.model.router.get_cache()
             router_loss = self.router_loss(router_cache, True)
@@ -212,27 +212,27 @@ class EMADiffLitModule(pl.LightningModule):
             self.active_router()
 
         # Set aux loss weight
-        if self.current_epoch < 20:
+        if self.current_epoch < 30:
             self.aux_loss_weight = 0.0
-        elif 20 <= self.current_epoch <= 25:
+        elif 30 <= self.current_epoch <= 40:
             self.aux_loss_weight = 0.01
-        elif 25 < self.current_epoch <= 35:
+        elif 40 < self.current_epoch <= 50:
             self.aux_loss_weight = 0.5
-        elif 35 < self.current_epoch <= 40:
+        elif 50 < self.current_epoch <= 60:
             self.aux_loss_weight = 0.15
 
-        if e < 20:
-        value = 0.1
-    elif 20 <= e <= 25:
-        t = (e - 20) / (25 - 20)  # 0 → 1
-        value = 0.1 + t * (0.3 - 0.1)
-    else:
-        value = 0.3
+        if self.current_epoch < 30:
+            value = 0.1
+        elif 30 <= self.current_epoch <= 50:
+            t = (self.current_epoch - 30) / (50 - 30)  # 0 → 1
+            value = 0.1 + t * (0.3 - 0.1)
+        else:
+            value = 0.3
 
-    # Aggiorna tutte le threshold degli esperti
-    for layer in self.model.layers:
-        if hasattr(layer, "threshold"):  # sicurezza
-            layer.threshold.data.fill_(value)
+        # Update all thresholds of experts
+        for layer in self.model.layers:
+            if hasattr(layer, "threshold"):
+                layer.threshold.data.fill_(value)
 
     def on_train_epoch_end(self):
         """
@@ -244,23 +244,23 @@ class EMADiffLitModule(pl.LightningModule):
 
         # Log dictionary
         log_dict = {
-            'train_class_loss' : self.train_class_losses.mean().item(),
-            'train_router_loss' : self.train_router_losses.mean().item(),
+            'train_class_loss' : torch.tensor(self.train_class_losses.detach().cpu()).mean().item(),
+            'train_router_loss' : torch.tensor(self.train_router_losses.detach().cpu()).mean().item(),
             'train_top1' : self.accuracy_metrics['top1_train'].compute().item() * 100,
             'train_top5' : self.accuracy_metrics['top5_train'].compute().item() * 100,
         }
 
         # If router is enabled, log router loss and cache metrics
-        if self.current_epoch >= 20:
-            log_dict['train_router_loss'] = self.train_router_losses.mean().item()
-            log_dict['train_total_loss'] = self.train_total_losses.mean().item()
+        if self.current_epoch >= 30:
+            log_dict['train_router_loss'] = torch.tensor(self.train_router_losses.detach().cpu()).mean().item()
+            log_dict['train_total_loss'] = torch.tensor(self.train_total_losses.detach().cpu()).mean().item()
             log_dict['train_cache_stats'] = self.calc_cache_metrics(self.train_router_cache_history)
 
-            log_dict['train_importance_loss'] = torch.tensor(self.train_importance_losses).mean().item()
-            log_dict['train_load_loss'] = torch.tensor(self.train_load_losses).mean().item()
+            log_dict['train_importance_loss'] = torch.tensor(self.train_importance_losses.detach().cpu()).mean().item()
+            log_dict['train_load_loss'] = torch.tensor(self.train_load_losses.detach().cpu()).mean().item()
 
-            log_dict['train_confidence_loss'] = torch.tensor(self.train_confidence_losses).mean().item()
-            log_dict['train_experts_usage'] = torch.tensor(self.train_experts_usage).mean().item()
+            log_dict['train_confidence_loss'] = torch.tensor(self.train_confidence_losses.detach().cpu()).mean().item()
+            log_dict['train_experts_usage'] = torch.tensor(self.train_experts_usage.detach().cpu()).mean().item()
 
             self.train_router_losses.clear(),
             self.train_total_losses.clear()
@@ -311,7 +311,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.val_class_losses.append(class_loss.item())
 
         # Compute router loss
-        if self.current_epoch >= 20:
+        if self.current_epoch >= 30:
             # Get router cache
             router_cache = self.model.router.get_cache()
             router_loss = self.router_loss(router_cache, train=False)
@@ -356,22 +356,22 @@ class EMADiffLitModule(pl.LightningModule):
         """
         # Log dictionary
         log_dict = {
-            'val_class_loss' : torch.tensor(self.val_class_losses).mean().item(),
+            'val_class_loss' : torch.tensor(self.val_class_losses.detach().cpu()).mean().item(),
             'val_top1' : self.accuracy_metrics['top1_val'].compute().item() * 100,
             'val_top5' : self.accuracy_metrics['top5_val'].compute().item() * 100,
         }
 
         # If router is enabled, log router loss and cache metrics
-        if self.current_epoch >= 20:
-            log_dict['val_router_loss'] = torch.tensor(self.val_router_losses).mean().item()
-            log_dict['val_total_loss'] = torch.tensor(self.val_total_losses).mean().item()
+        if self.current_epoch >= 30:
+            log_dict['val_router_loss'] = torch.tensor(self.val_router_losses.detach().cpu()).mean().item()
+            log_dict['val_total_loss'] = torch.tensor(self.val_total_losses.detach().cpu()).mean().item()
             log_dict['val_cache_stats'] = self.calc_cache_metrics(self.val_router_cache_history)
 
-            log_dict['val_importance_loss'] = torch.tensor(self.val_importance_losses).mean().item()
-            log_dict['val_load_loss'] = torch.tensor(self.val_load_losses).mean().item()
+            log_dict['val_importance_loss'] = torch.tensor(self.val_importance_losses.detach().cpu()).mean().item()
+            log_dict['val_load_loss'] = torch.tensor(self.val_load_losses.detach().cpu()).mean().item()
 
-            log_dict['val_confidence_loss'] = torch.tensor(self.val_confidence_losses).mean().item()
-            log_dict['val_experts_usage'] = torch.tensor(self.val_experts_usage).mean().item()
+            log_dict['val_confidence_loss'] = torch.tensor(self.val_confidence_losses.detach().cpu()).mean().item()
+            log_dict['val_experts_usage'] = torch.tensor(self.val_experts_usage.detach().cpu()).mean().item()
 
             self.val_router_losses.clear()
             self.val_total_losses.clear()
@@ -399,12 +399,15 @@ class EMADiffLitModule(pl.LightningModule):
         router_mul = 5.0
         wd = self.weight_decay
 
+        # Optimizer
         self.optimizer = Adam(
             [
                 {'params': backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
                 {'params': router_params, 'lr': base_lr * router_mul, 'weight_decay': wd, 'name' : 'router'}
             ]
         )
+
+        # Learning rate scheduler
         self.lr_scheduler = CosineAnnealingLR(self.optimizer, T_max=self.train_epochs, eta_min=0.00001)
 
         return [self.optimizer], [self.lr_scheduler]
@@ -448,6 +451,8 @@ class EMADiffLitModule(pl.LightningModule):
 
             with torch.no_grad():
                 # Compute confidence loss
+                expert_weights = expert_weights.detach().cpu()
+                
                 patch_entropies = -(expert_weights * torch.log(expert_weights + 1e-8)).sum(dim = 1)
                 confidence_loss = patch_entropies.mean().item()
                 confidence_losses_step.append(confidence_loss)

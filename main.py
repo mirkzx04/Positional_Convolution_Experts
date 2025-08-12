@@ -7,11 +7,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import torch
+
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 
 import pytorch_lightning as pl
+
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from DataAugmentation import DataAgumentation
@@ -179,7 +182,7 @@ if __name__ == "__main__":
 
     # Hyperparameters of model
     num_exp = 10
-    layer_number = 4
+    layer_number = 5
     patch_size = 16
     lr = 0.0005
     dropout = 0.25
@@ -274,10 +277,11 @@ if __name__ == "__main__":
         gradient_clip_val=0.5,
         gradient_clip_algorithm='norm',
         accelerator=device,
-        enable_checkpointing= True,
+        enable_checkpointing= False,
+        callbacks=[checkpoint_callback],
     )
     print(f'--- Start training --- \n')
-    if os.path.exists('checkpoints/best-model.ckpt'):
-        trainer.fit(lit_module, train_loader, val_loader, ckpt_path='checkpoints/best-model.ckpt')
+    if os.path.exists('checkpoints/last.ckpt'):
+        trainer.fit(lit_module, train_loader, val_loader, ckpt_path='checkpoints/last.ckpt')
     else:
         trainer.fit(lit_module, train_loader, val_loader)

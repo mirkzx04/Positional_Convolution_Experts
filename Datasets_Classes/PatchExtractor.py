@@ -27,12 +27,13 @@ class PatchExtractor(nn.Module):
                 where `num_frequencies` is the number of frequency bands used for the encoding.
         """
     
-        freqs = 2 ** torch.arange(self.num_frequencies, dtype=coords.dtype, device=coords.device)
+        freqs = torch.arange(self.num_frequencies).to(device = coords.device)
+        freqs = 2 ** freqs
 
         coords = coords.unsqueeze(-1)
         angles = 2 * torch.pi * coords * freqs
         fourier = torch.cat([torch.sin(angles), torch.cos(angles)], dim = -1)
-        
+
         return fourier.reshape(*fourier.shape[:-2], -1)
 
     def forward(self, image):
@@ -80,8 +81,8 @@ class PatchExtractor(nn.Module):
                 coords.append([x_norm, y_norm]) # (x,y) normalizede 
 
         coords = torch.tensor(coords, dtype=torch.float32, device=image.device)
-        coords_fourier = repeat(coords_fourier, 'n coord -> b n coord h w', b = B, h = self.patch_size, w = self.patch_size)
-
+        coords = repeat(coords, 'n xy -> b n coord xy', b = B)
+        
         # Get coords fourier
         coords_fourier = self.fourier_features(coords)
         patch_pos_feats = torch.cat([coords, coords_fourier], dim = -1)
@@ -90,8 +91,8 @@ class PatchExtractor(nn.Module):
 
         # Add pixel-level position within patch
         yy,xx = torch.meshgrid(
-            torch.linspace(0, 1, self.patch_size),
-            torch.linspace(0, 1, self.patch_size),
+            torch.linspace(0, 1, self.patch_size, device = image.device),
+            torch.linspace(0, 1, self.patch_size, device = image.device),
             indexing='ij'
         )
 

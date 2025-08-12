@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class RouterGate(nn.Module):
-    def __init__(self, in_channel, patch_size, num_experts, pooling_size=4):
+    def __init__(self, in_channel, patch_size, num_experts):
         super().__init__()
         
         self.flatten = nn.Flatten()
