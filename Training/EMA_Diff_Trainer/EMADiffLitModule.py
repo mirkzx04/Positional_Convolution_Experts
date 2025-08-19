@@ -19,8 +19,7 @@ class EMADiffLitModule(pl.LightningModule):
                 patch_size,
                 dropout,
                 num_classes,
-                threshold,
-                temp,
+                nucleus_sampling_p,
                 lr, 
                 weight_decay,
                 augmentation,
@@ -39,8 +38,7 @@ class EMADiffLitModule(pl.LightningModule):
             patch_size (int): Patch size.
             dropout (float): Dropout rate.
             num_classes (int): Number of classes.
-            threshold (float): Threshold for router.
-            temp (float): Temperature for router.
+            nucleus_sampling_p (float): Nucleus sampling probability.
             lr (float): Learning rate.
             weight_decay (float): Weight decay.
             augmentation: Data augmentation object.
@@ -58,8 +56,7 @@ class EMADiffLitModule(pl.LightningModule):
             patch_size = patch_size,
             dropout=dropout,
             num_classes=num_classes,
-            threshold=threshold,
-            temp=temp
+            nucleus_sampling_p=nucleus_sampling_p
         )
 
         self.lr = lr
@@ -179,13 +176,7 @@ class EMADiffLitModule(pl.LightningModule):
             self.accuracy_metrics['top1_train'].update(logits, labels)
             self.accuracy_metrics['top5_train'].update(logits, labels)
 
-        return {
-            'pred_labels': predictions,
-            'class_loss': class_loss,
-            'router_loss': router_loss,
-            'loss' : loss,
-            'actual_batch' : batch_idx
-        }
+        return {'loss' : loss}
 
     def on_after_backward(self):
         """
@@ -208,31 +199,36 @@ class EMADiffLitModule(pl.LightningModule):
         # Set router trainable
         if self.current_epoch == 0:
             self.disable_router()
-        elif self.current_epoch == 20:
+        elif self.current_epoch >= 30:
             self.active_router()
 
         # Set aux loss weight
         if self.current_epoch < 30:
             self.aux_loss_weight = 0.0
-        elif 30 <= self.current_epoch <= 40:
-            self.aux_loss_weight = 0.01
-        elif 40 < self.current_epoch <= 50:
-            self.aux_loss_weight = 0.5
-        elif 50 < self.current_epoch <= 60:
+        elif 30 <= self.current_epoch < 40:
+            t = (self.current_epoch - 30) / 10
+            self.aux_loss_weight = 0.02 + t * (0.05 - 0.02)
+        elif 40 < self.current_epoch < 50:
+            t = (self.current_epoch - 40) / 10
+            self.aux_loss_weight = 0.05 + t * (0.1 - 0.05)
+        elif 40 <= self.current_epoch < 70:
+            t = (self.current_epoch - 40) / 30
+            self.aux_loss_weight = 0.1 + t * (0.15 - 0.1)
+        else:
             self.aux_loss_weight = 0.15
 
-        if self.current_epoch < 30:
-            value = 0.1
-        elif 30 <= self.current_epoch <= 50:
-            t = (self.current_epoch - 30) / (50 - 30)  # 0 → 1
-            value = 0.1 + t * (0.3 - 0.1)
-        else:
-            value = 0.3
+        # if self.current_epoch < 30:
+        #     value = 0.1
+        # elif 30 <= self.current_epoch <= 50:
+        #     t = (self.current_epoch - 30) / (50 - 30)  # 0 → 1
+        #     value = 0.1 + t * (0.3 - 0.1)
+        # else:
+        #     value = 0.3
 
-        # Update all thresholds of experts
-        for layer in self.model.layers:
-            if hasattr(layer, "threshold"):
-                layer.threshold.data.fill_(value)
+        # # Update all thresholds of experts
+        # for layer in self.model.layers:
+        #     if hasattr(layer, "threshold"):
+        #         layer.threshold.data.fill_(value)
 
     def on_train_epoch_end(self):
         """
@@ -244,19 +240,19 @@ class EMADiffLitModule(pl.LightningModule):
 
         # Log dictionary
         log_dict = {
-            'train_class_loss' : torch.tensor(self.train_class_losses.detach().cpu()).mean().item(),
-            'train_router_loss' : torch.tensor(self.train_router_losses.detach().cpu()).mean().item(),
+            'train_class_loss' : torch.tensor(self.train_class_losses).mean().item(),
+            'train_router_loss' : torch.tensor(self.train_router_losses).mean().item(),
             'train_top1' : self.accuracy_metrics['top1_train'].compute().item() * 100,
             'train_top5' : self.accuracy_metrics['top5_train'].compute().item() * 100,
         }
 
         # If router is enabled, log router loss and cache metrics
         if self.current_epoch >= 30:
-            log_dict['train_router_loss'] = torch.tensor(self.train_router_losses.detach().cpu()).mean().item()
-            log_dict['train_total_loss'] = torch.tensor(self.train_total_losses.detach().cpu()).mean().item()
+            log_dict['train_router_loss'] = torch.tensor(self.train_router_losses).mean().item()
+            log_dict['train_total_loss'] = torch.tensor(self.train_total_losses).mean().item()
             log_dict['train_cache_stats'] = self.calc_cache_metrics(self.train_router_cache_history)
 
-            log_dict['train_importance_loss'] = torch.tensor(self.train_importance_losses.detach().cpu()).mean().item()
+            log_dict['train_importance_loss'] = torch.tensor(self.train_importance_losses).mean().item()
             log_dict['train_load_loss'] = torch.tensor(self.train_load_losses.detach().cpu()).mean().item()
 
             log_dict['train_confidence_loss'] = torch.tensor(self.train_confidence_losses.detach().cpu()).mean().item()
@@ -289,7 +285,7 @@ class EMADiffLitModule(pl.LightningModule):
         """ 
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
-        data = self.augmentation(data)
+        # data = self.augmentation(data)
         
         logits = self(data)
 
@@ -335,13 +331,7 @@ class EMADiffLitModule(pl.LightningModule):
             self.accuracy_metrics['top1_val'].update(logits, labels)
             self.accuracy_metrics['top5_val'].update(logits, labels)
 
-        return {
-            'pred_labels': predictions,
-            'class_loss': class_loss,
-            'router_loss': router_loss,
-            'loss' : loss,
-            'actual_batch' : batch_idx,
-        }
+        return {'loss' : loss}
 
     def on_validation_epoch_start(self):
         self.accuracy_metrics['top1_val'].reset()
@@ -356,22 +346,22 @@ class EMADiffLitModule(pl.LightningModule):
         """
         # Log dictionary
         log_dict = {
-            'val_class_loss' : torch.tensor(self.val_class_losses.detach().cpu()).mean().item(),
+            'val_class_loss' : torch.tensor(self.val_class_losses).mean().item(),
             'val_top1' : self.accuracy_metrics['top1_val'].compute().item() * 100,
             'val_top5' : self.accuracy_metrics['top5_val'].compute().item() * 100,
         }
 
         # If router is enabled, log router loss and cache metrics
         if self.current_epoch >= 30:
-            log_dict['val_router_loss'] = torch.tensor(self.val_router_losses.detach().cpu()).mean().item()
-            log_dict['val_total_loss'] = torch.tensor(self.val_total_losses.detach().cpu()).mean().item()
+            log_dict['val_router_loss'] = torch.tensor(self.val_router_losses).mean().item()
+            log_dict['val_total_loss'] = torch.tensor(self.val_total_losses).mean().item()
             log_dict['val_cache_stats'] = self.calc_cache_metrics(self.val_router_cache_history)
 
-            log_dict['val_importance_loss'] = torch.tensor(self.val_importance_losses.detach().cpu()).mean().item()
-            log_dict['val_load_loss'] = torch.tensor(self.val_load_losses.detach().cpu()).mean().item()
+            log_dict['val_importance_loss'] = torch.tensor(self.val_importance_losses).mean().item()
+            log_dict['val_load_loss'] = torch.tensor(self.val_load_losses).mean().item()
 
-            log_dict['val_confidence_loss'] = torch.tensor(self.val_confidence_losses.detach().cpu()).mean().item()
-            log_dict['val_experts_usage'] = torch.tensor(self.val_experts_usage.detach().cpu()).mean().item()
+            log_dict['val_confidence_loss'] = torch.tensor(self.val_confidence_losses).mean().item()
+            log_dict['val_experts_usage'] = torch.tensor(self.val_experts_usage).mean().item()
 
             self.val_router_losses.clear()
             self.val_total_losses.clear()
@@ -431,12 +421,22 @@ class EMADiffLitModule(pl.LightningModule):
         confidence_losses_step = []
         experts_usage_list_step = []
 
+        importance_loss = 0.0
+        top1 = 0.0
+        load_loss = 0.0
+
+        patch_entropies = 0.0
+        confidence_loss = 0.0
+        experts_usage = 0.0
+
+        total_loss = 0.0
+        
         if not router_cache:
             return torch.tensor(0.0, requires_grad=True)
         
         for layer_idx in range(len(router_cache)):
             # Get experts weights [B x P, num_experts]
-            expert_weights = router_cache[layer_idx]['weights']
+            expert_weights = router_cache[layer_idx]['norm_weights']
 
             # Importance loss
             importance = expert_weights.sum(dim = 0)
@@ -514,8 +514,14 @@ class EMADiffLitModule(pl.LightningModule):
                 # Extract all tensor of current metrics from all batches
                 values = [router_cache_history[b_idx][layer_idx][key] for b_idx in range(batches_num)]
 
-                # Concat all
-                values_cat = torch.cat([v.detach().cpu() for v in values], dim = 0)
+                processed_valued = []
+                for v in values : 
+                    v_detached = v.detach().cpu()
+                    if v_detached.dim() == 0:
+                        v_detached = v_detached.unsqueeze(0)
+                    processed_valued.append(v_detached)
+                
+                values_cat = torch.cat(processed_valued, dim = 0)
                 stats[layer_idx][key] = {
                     'mean': values_cat.mean().item(),
                     'std': values_cat.std().item(),

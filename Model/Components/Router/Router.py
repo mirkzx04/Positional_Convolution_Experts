@@ -10,7 +10,7 @@ from torch import nn
 from .RouterGate import RouterGate
 
 class Router(nn.Module):
-    def __init__(self,num_experts, num_layers, pce_layer_info):
+    def __init__(self,num_experts, num_layers, pce_layer_info, nucleus_sampling_p):
         super().__init__()
         """
         Router constructor
@@ -33,83 +33,110 @@ class Router(nn.Module):
             for info in pce_layer_info
         ])
 
-        # Set parameters of adaptive threshold
-        self.mask_beta = nn.Parameter(torch.tensor(10., dtype=torch.float32), requires_grad=True)
-        self.min_experts_active = max(1, 
-            num_experts // 2 if num_experts <= 4 
-            else (2 if num_experts < 8 else num_experts // 4)
-        )
+        self.p = nucleus_sampling_p
+        self.min_k = 1
 
-        self.wth_max_c = nn.Parameter(torch.tensor(0.4, dtype=torch.float32), requires_grad=True) 
-        self.wth_entropy_c = nn.Parameter(torch.tensor(0.3, dtype=torch.float32), requires_grad=True)
-        self.wth_gap_c = nn.Parameter(torch.tensor(0.3, dtype=torch.float32), requires_grad=True)
+        self.val_tau = 0.9
+        self.val_p = 0.8
+        self.val_min_k = 1
 
-    def compute_gap(self, sort_weights):
-        """
-        Compute gap between top-1 expert and successive experts 
+    # def compute_gap(self, sort_weights):
+    #     """
+    #     Compute gap between top-1 expert and successive experts 
 
-        Args : 
-            sort_weights : torch.tensor with shape [B xnP, num_experts] - sorted softmax weights 
-        """
-        k = min(4, self.num_experts - 1)
-        mean_rest = sort_weights[:, 1:k+1].mean(dim = -1, keepdim = True)
-        gap = (sort_weights[:, 0:1] - mean_rest) / (sort_weights[:, 0:1] + 1e-8)
+    #     Args : 
+    #         sort_weights : torch.tensor with shape [B xnP, num_experts] - sorted softmax weights 
+    #     """
+    #     k = min(4, self.num_experts - 1)
+    #     mean_rest = sort_weights[:, 1:k+1].mean(dim = -1, keepdim = True)
+    #     gap = (sort_weights[:, 0:1] - mean_rest) / (sort_weights[:, 0:1] + 1e-8)
 
-        return torch.clamp(gap, 0., 1.)
+    #     return torch.clamp(gap, 0., 1.)
     
-    def compute_adaptive_threshold(self, weights, base_threshold):  
+    # def compute_adaptive_threshold(self, weights, base_threshold):  
+    #     """
+    #     Compute adaptive threshold that it based of multiple statistics metrics
+
+    #     Args:
+    #         weights : Tensor(B x nP, num_experts) - softmax weights
+    #         base_threshold : Float
+    #     """
+    #     # Sorted weights
+    #     sort_weights, _ = weights.sort(dim = -1, descending = True)
+
+    #     # 1 - w_max => if w_max is high than threshold is lower, w_max is lower than threshold is high
+    #     max_component = 1.0 - sort_weights[:, 0:1]
+    #     mean_weight, std_weight = weights.mean(dim = -1, keepdim = True), weights.std(dim = -1, keepdim = True)
+
+    #     # Compute entropy, high entropy (uniform distribution) => lower threshold
+    #     # lower entropy (concetrated distribution) => high threshold
+    #     entropy = -(weights * torch.log(weights + 1e-18)).sum(dim = -1, keepdim = True)
+    #     max_entropy = math.log(self.num_experts)
+    #     entropy_component = 1.0 - entropy / max_entropy
+        
+    #     # Compute top-1 gap
+    #     gap_component = self.compute_gap(sort_weights)
+
+    #     # Linear combination of the top router expert weight,
+    #     # entropy and gap
+    #     # all weights of components is a learnable parameters to make sure that the model
+    #     # can understand the importance of each components
+    #     adaptive_factor = (
+    #         self.wth_max_c * max_component + self.wth_entropy_c * entropy_component + self.wth_gap_c * gap_component
+    #     )
+
+    #     # Compute adaptive threshold
+    #     adaptive_threshold = base_threshold * (0.5 + adaptive_factor)
+
+    #     # Defines min and max threshold
+    #     min_threshold = torch.maximum(
+    #         torch.tensor(0.05, device=weights.device),
+    #         mean_weight - 0.5 * std_weight
+    #     )
+    #     max_threshold = torch.minimum(
+    #         torch.tensor(0.7, device=weights.device),
+    #         sort_weights[:, 0:1] - 0.1 * std_weight
+    #     )
+        
+    #     adaptive_threshold = torch.clamp(adaptive_threshold, min=min_threshold, max=max_threshold)
+        
+    #     if self.min_experts_active <= self.num_experts:
+    #         kth_weight = sort_weights[:, self.min_experts_active-1 : self.min_experts_active]
+    #         adaptive_threshold = torch.minimum(adaptive_threshold, kth_weight * 0.9)
+        
+    #     return adaptive_threshold
+
+    def top_p_mask(self, weights, p):
         """
-        Compute adaptive threshold that it based of multiple statistics metrics
-
-        Args:
-            weights : Tensor(B x nP, num_experts) - softmax weights
-            base_threshold : Float
+        Create top-p mask for routing
         """
-        # Sorted weights
-        sort_weights, _ = weights.sort(dim = -1, descending = True)
+        # Sort weights
+        w_sorted, idx = torch.sort(weights, descending = True, dim = -1)
 
-        # 1 - w_max => if w_max is high than threshold is lower, w_max is lower than threshold is high
-        max_component = 1.0 - sort_weights[:, 0:1]
-        mean_weight, std_weight = weights.mean(dim = -1, keepdim = True), weights.std(dim = -1, keepdim = True)
+        # Compute cumulative sum
+        cumsum = torch.cumsum(w_sorted, dim = -1)
+        rank = torch.arange(w_sorted.size(-1), device = weights.device).view(*((1,)*(weights.ndim - 1)), -1)
 
-        # Compute entropy, high entropy (uniform distribution) => lower threshold
-        # lower entropy (concetrated distribution) => high threshold
-        entropy = -(weights * torch.log(weights + 1e-18)).sum(dim = -1, keepdim = True)
-        max_entropy = math.log(self.num_experts)
-        entropy_component = 1.0 - entropy / max_entropy
-        
-        # Compute top-1 gap
-        gap_component = self.compute_gap(sort_weights)
+        keep_sorted = (cumsum <= p) | (rank < self.min_k)
+        mask = torch.zeros_like(weights)
+        mask.scatter_(-1, idx, keep_sorted.type_as(weights))
 
-        # Linear combination of the top router expert weight,
-        # entropy and gap
-        # all weights of components is a learnable parameters to make sure that the model
-        # can understand the importance of each components
-        adaptive_factor = (
-            self.wth_max_c * max_component + self.wth_entropy_c * entropy_component + self.wth_gap_c * gap_component
-        )
+        return mask
 
-        # Compute adaptive threshold
-        adaptive_threshold = base_threshold * (0.5 + adaptive_factor)
-
-        # Defines min and max threshold
-        min_threshold = torch.maximum(
-            torch.tensor(0.05, device=weights.device),
-            mean_weight - 0.5 * std_weight
-        )
-        max_threshold = torch.minimum(
-            torch.tensor(0.7, device=weights.device),
-            sort_weights[:, 0:1] - 0.1 * std_weight
-        )
-        
-        adaptive_threshold = torch.clamp(adaptive_threshold, min=min_threshold, max=max_threshold)
-        
-        if self.min_experts_active <= self.num_experts:
-            kth_weight = sort_weights[:, self.min_experts_active-1 : self.min_experts_active]
-            adaptive_threshold = torch.minimum(adaptive_threshold, kth_weight * 0.9)
-        
-        return adaptive_threshold
-
+    def tau_scheduler(self, current_epoch):
+        """
+        Scheduler for tau
+        """
+        if current_epoch is not None and current_epoch < 30:
+            return 1.5
+        elif current_epoch is not None and 30 <= current_epoch <= 70:
+            t0, t1, T = 1.5, 0.85, 80
+            e = min(max(current_epoch, 0), T)
+            cos = 0.5 * (1 + torch.cos(torch.tensor(e/T * math.pi)))
+            return (t1 + (t0 - t1) * cos.item())
+        elif current_epoch > 70:
+            return 0.75
+    
     def forward(self, patch, layer_idx, threshold, current_epoch=None):
         """
         Forward method of Router
@@ -126,43 +153,81 @@ class Router(nn.Module):
         """
         logits = self.gates[layer_idx](patch)
 
-        # Compute softmax weights
-        weights = F.softmax(logits, dim=-1) 
-
-        # Compute adaptive threshold
-        adaptive_threshold = self.compute_adaptive_threshold(weights=weights, base_threshold=threshold)
-
-        if current_epoch is not None and current_epoch < 20:
-            # Create uniform weights when epoch < 20 or epoch not provided
-            # Shape: [B, P, num_experts] with uniform weights
-            weights_norm = torch.ones_like(weights) / self.num_experts
-        elif current_epoch is not None and 20 <= current_epoch <= 25:
-            # Create soft weights when 20 <= epoch <= 25
-            tau = max(0.1, 1.0 -( current_epoch - 20) * 0.18)
-            weights_norm = torch.sigmoid((weights - adaptive_threshold) / tau)
-
-            weights_norm = weights_norm / torch.clamp(weights_norm.sum(dim=-1, keepdim=True), min = 1e-8)
-        elif current_epoch > 25 or self.training == False:
-            # Create hard weights when epoch > 25
-            tau = 0.1
-            hard_mask = (weights > adaptive_threshold).float()
-            soft_mask = torch.sigmoid((weights - adaptive_threshold) / tau)
-            filtered_weights = hard_mask + (soft_mask - hard_mask).detach()
-
-            # Normalize weights
-            weights_norm = filtered_weights / torch.clamp(filtered_weights.sum(dim=-1, keepdim=True), min = 1e-8)
         
+        if self.training:
+            # Compute router temperature
+            tau = self.tau_scheduler(current_epoch)
+            if tau > 0:
+                weights = F.softmax(logits / tau, dim=-1)
+            else:
+                weights = F.softmax(logits, dim=-1)
+            
+            # Compute top-p mask
+            mask = self.top_p_mask(weights, p = self.p)
+
+            if current_epoch < 30:
+                # Create uniform weights with blending factor
+                alpha = 1.0 if current_epoch is None else float(min(1.0, current_epoch / 30))
+                uniform = weights.new_full(weights.shape, 1.0 / self.num_experts)
+
+                weights_norm = (1 - alpha) * uniform + alpha * weights
+                
+            elif 30 <= current_epoch <= 70:
+                h = (current_epoch - 30) / 40
+                h = float(max(0.0, min(1.0, h)))
+
+                # Compute hard weights
+                masked_weights = weights * mask
+                denom = masked_weights.sum(dim=-1, keepdim=True).clamp_min(1e-10)
+                hard_weights = masked_weights / denom
+
+                # apply straight through estimator
+                weights_norm = hard_weights.detach() + (weights - weights.detach())
+
+                weights_norm = (1.0- h)*weights + h * weights_norm
+
+            elif current_epoch > 70:
+                # Apply top-p mask to weights
+                masked_weights = weights * mask
+
+                # Calculate denominator for normalization, with minimum value of 1e-10
+                denom = masked_weights.sum(dim=-1, keepdim=True).clamp_min(1e-10)
+
+                # Normalize masked weights
+                fw = masked_weights / denom
+
+                # Apply straight-through estimator for gradient
+                weights_norm = fw.detach() + weights - weights.detach()
+        else:
+            weights, weights_norm, mask = self.validation_mode(logits)
+            tau = self.val_tau
+
         # Save cache
         if self.cache_enabled:
             self.layers_cache.append({
                 'logits' : logits,
                 'weights' : weights,
                 'norm_weights' : weights_norm,
-                'base_threshold' : threshold,
-                'adaptive_threshold' : adaptive_threshold
+                'tau' : tau,
+                'mask' : mask
             })
 
         return weights_norm
+
+    def validation_mode(self, logits):
+        """
+        Validation mode for router
+        """
+        probs = F.softmax(logits / self.val_tau, dim=-1)
+
+        # Compute top-p mask
+        mask = self.top_p_mask(probs, p = self.val_p)
+        masked = probs * mask
+
+        denom = masked.sum(dim=-1, keepdim=True).clamp_min(1e-10)
+        weights_norm = masked / denom
+
+        return probs, weights_norm, mask
 
     def get_cached_metrics(self):
         if self.cache_enabled:

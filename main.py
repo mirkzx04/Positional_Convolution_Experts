@@ -191,7 +191,7 @@ if __name__ == "__main__":
 
     # Hyperparameters of router
     # router_temperature = 0.25
-    threshold = 0.75
+    nucleus_sampling_p = 0.85
 
     # Training metrics
     train_epochs = 200
@@ -199,7 +199,7 @@ if __name__ == "__main__":
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
-    print(f"Router: temp={router_temperature}, thresh={threshold}")
+    print(f"Router: nucleus_sampling_p={nucleus_sampling_p}")
     print(f"Training: epochs={train_epochs}, batch={batch_size}\n")
     print('\n ------------------------ \n')
 
@@ -240,19 +240,16 @@ if __name__ == "__main__":
     # Defines checkpointer and Logger
     logger = WandbLogger(
         project="PCE",
-        num_exp=num_exp,
-        layer_number=layer_number,
-        patch_size=patch_size,
-        lr=lr,
+        log_model = True,
+        name = 'Test Warmaup 5 (Top-p)'
     )
 
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
-        mode='min',
-        save_top_k=1,
+        save_top_k=0,
         save_last=True,
-        filename='best-model',
-        dirpath='checkpoints/'
+        filename = 'best-model',
+        dirpath = 'checkpoints/',
+        save_weights_only = True,
     )
 
     lit_module = EMADiffLitModule(
@@ -261,8 +258,7 @@ if __name__ == "__main__":
         patch_size,
         dropout,
         num_classes,
-        threshold,
-        router_temperature,
+        nucleus_sampling_p,
         lr, 
         weight_decay,
         augmentation,
