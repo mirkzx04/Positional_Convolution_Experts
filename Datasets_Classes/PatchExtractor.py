@@ -81,13 +81,12 @@ class PatchExtractor(nn.Module):
                 coords.append([x_norm, y_norm]) # (x,y) normalizede 
 
         coords = torch.tensor(coords, dtype=torch.float32, device=image.device)
-        coords = repeat(coords, 'n xy -> b n coord xy', b = B)
+        coords = repeat(coords, 'n xy -> b n xy', b = B)
         
         # Get coords fourier
         coords_fourier = self.fourier_features(coords)
         patch_pos_feats = torch.cat([coords, coords_fourier], dim = -1)
-        patch_pos_feats = patch_pos_feats.unsqueeze(-1).unsqueeze(-1).exp(-1, -1, -1, self.patch_size, self.patch_size)
-
+        patch_pos_feats = patch_pos_feats.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, self.patch_size, self.patch_size)
 
         # Add pixel-level position within patch
         yy,xx = torch.meshgrid(
@@ -109,7 +108,7 @@ class PatchExtractor(nn.Module):
         xx_fourier = xx_fourier.permute(0, 1, 4, 2, 3)
         yy_fourier = yy_fourier.permute(0, 1, 4, 2, 3)
 
-        pixel_feats = torch.can_cast([xx_feat, yy_feat, xx_fourier, yy_fourier], dim = 2)
+        pixel_feats = torch.cat([xx_feat, yy_feat, xx_fourier, yy_fourier], dim = 2)
 
         patches = patches.to(image.device)
         patches_with_coords = torch.cat([patches, patch_pos_feats, pixel_feats], dim = 2)
