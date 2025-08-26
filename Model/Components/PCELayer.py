@@ -3,7 +3,7 @@ import torch
 from torch import nn
 
 from .ConvExpert import ConvExpert
-from .FinalConv import FinalConv
+
 class PCELayer(nn.Module):
     def __init__(self,
                 inpt_channel,
@@ -12,7 +12,8 @@ class PCELayer(nn.Module):
                 dropout,
                 patch_size,
                 fourie_freq,
-                threshold):
+                gate_channel,
+                ):
         super().__init__()
         self.experts = nn.ModuleList([
             ConvExpert(
@@ -22,14 +23,12 @@ class PCELayer(nn.Module):
             )
             for _ in range(num_experts)
         ])
-        # self.final_conv = FinalConv(out_channel, out_channel)
-        self.final_conv = nn.Conv2d(
-            in_channels=out_channel,
-            out_channels=out_channel,
-            padding=1,
-            kernel_size=1
+
+        flatten_channel = gate_channel * patch_size * patch_size
+        self.router_gate = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(flatten_channel, num_experts)
         )
 
-        self.threshold = nn.Parameter(torch.tensor(threshold, dtype=torch.float32, requires_grad=True))
         self.patch_size = patch_size
         self.fourier_freq = fourie_freq

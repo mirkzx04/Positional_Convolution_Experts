@@ -26,7 +26,7 @@ class ConvExpert(nn.Module):
                 padding=kernel_size // 2
             ),
             nn.BatchNorm2d(out_channel),
-            nn.ReLU(inplace=True),
+            nn.GELU(),
             nn.Dropout(dropout),
 
             nn.Conv2d(
@@ -36,23 +36,9 @@ class ConvExpert(nn.Module):
                 padding=kernel_size // 2
             ),
             nn.BatchNorm2d(out_channel),
+            nn.GELU(),
         )
         
-        # Define residual connection
-        self.skip_connection = None
-        if in_channel != out_channel:
-            self.skip_connection = nn.Sequential(
-                nn.Conv2d(
-                    in_channels=in_channel,
-                    out_channels=out_channel,
-                    kernel_size=1,
-                    padding=0
-                ),
-                nn.BatchNorm2d(out_channel)
-            )
-
-        # Final ReLU activation
-        self.final_relu = nn.ReLU(inplace=True)
     def forward(self, X):
 
         # Setup identity for residual connection
@@ -60,14 +46,4 @@ class ConvExpert(nn.Module):
 
         # Apply convolution block
         out = self.conv_block(X)
-
-        # Skip connection
-        if self.use_residual:
-            if self.skip_connection is not None:
-                identity = self.skip_connection(X)
-            out += identity
-
-        # Final ReLU activation
-        out = self.final_relu(out)
-
         return out
