@@ -9,8 +9,9 @@ from Model.Components.ConvExpert import ConvExpert
 from Model.Components.Router import Router
 from Model.Components.PCELayer import PCELayer
 
+from Model.Components.MoEAggregator import MoEAggregator
 from Datasets_Classes.PatchExtractor import PatchExtractor
-
+from Model.Components.Router.Router import Router
 
 class PCENetwork(nn.Module):
     def __init__(self, 
@@ -19,8 +20,6 @@ class PCENetwork(nn.Module):
                     patch_size,
                     dropout,
                     num_classes,
-                    embed_dim,
-                    threshold,
                  ):
         super().__init__()
 
@@ -40,6 +39,7 @@ class PCENetwork(nn.Module):
         """
 
         self.num_classes = num_classes
+        self.num_experts = num_experts
 
         self.patch_extractor = PatchExtractor(patch_size)
 
@@ -52,18 +52,21 @@ class PCENetwork(nn.Module):
             num_experts=num_experts,
             dropout=dropout,
             layer_number=layer_number,
-            threshold = threshold
         )        
 
         self.router = Router(
             num_experts=num_experts,
             num_layers=layer_number,
-            pce_layer_info = layer_info,
         )
 
         self.linear_layer = LazyLinear(self.num_classes)
 
-    def create_layers(self, num_experts, dropout, layer_number, threshold):
+        self.moe_aggregator = MoEAggregator(
+            num_experts=[num_experts] * layer_number,
+            num_layers=layer_number,
+        )
+
+    def create_layers(self, num_experts, dropout, layer_number):
         """
         Create layers of PCE Network
 
@@ -90,10 +93,6 @@ class PCENetwork(nn.Module):
         for l in range(layer_number):
             # Gate channel is the sum of input channel and fourier channel
             gate_channel = inpt_channel + fourier_channel
-            layer_info.append((
-                gate_channel, patch_size
-                )
-            )
             # Create PCE Layer
             self.layers.append(PCELayer(
                 inpt_channel=inpt_channel,
@@ -102,7 +101,7 @@ class PCENetwork(nn.Module):
                 dropout=dropout,
                 patch_size=patch_size,
                 fourie_freq=fourier_freq,
-                threshold = threshold
+                gate_channel=gate_channel,
             ))
 
             # Update patch size
@@ -138,24 +137,6 @@ class PCENetwork(nn.Module):
 
         return X_patches, X_patches_reshape, X_patches_coords_reshape, h_patches, w_patches
 
-    def get_exp_scores(self, X_patches_coords_reshape, layer_idx, B, P, thresholds, current_epoch):
-        """
-        Get experts scores from router
-
-        Args : 
-            X_patches (torch.tensor) -> Feature map, tensor shape (B * P, C, nH, nW)
-            layer_idx (int) -> index of current layer
-
-        Returns:
-            exp_scores -> tensor (B, P, num_experts)
-            where num_experts is the number of experts in the layer
-        """ 
-        # get experts scores
-        exp_scores = self.router(X_patches_coords_reshape, layer_idx, thresholds, current_epoch)
-        exp_scores = exp_scores.reshape(B, P, -1)
-
-        return exp_scores
-
     def forward(self, X, current_epoch=None):
         """
         Forward method of PCE Network
@@ -181,42 +162,57 @@ class PCENetwork(nn.Module):
             logits (torch.tensor) : tensor beatches (B, num_classes)
         """
 
+        aux_loss = 0.0
+        z_loss = 0.0
+
+        tot_aux_loss = 0.0
+
         for layer_idx, layer in enumerate(self.layers):
             # Layer components
             experts = layer.experts
-            final_conv = layer.final_conv
-            threshold = layer.threshold
             patch_size = layer.patch_size
+            router_gate = layer.router_gate
 
-            num_expert = len(experts)
+            expert_outputs_list = []
 
             # Divides feature map / input img in patches
             X_patches, X_patches_reshape, X_patches_coords_reshape, h_patches, w_patches \
             = self.get_patches(X, patch_size)
-            B, P, _, _, _ = X_patches.shape
+            B, P, C, H, W = X_patches.shape
+            N = B * P
 
-            # Take experts scores
-            exp_scores = self.get_exp_scores(
-                X_patches_coords_reshape, layer_idx, B, P, threshold, current_epoch
-            )
+            dispatch, combine, z_loss, aux_loss = self.router(X_patches_coords_reshape, router_gate, current_epoch) # [N, E, Ccap], scalar, scalar
+            self.moe_aggregator.update_layer(layer_idx, dispatch, combine)
 
-            # Applied all experts at batch
-            all_outputs = [expert(X_patches_reshape) for expert in experts]
-            all_outputs = torch.stack(all_outputs, dim = 0) # Shape : [num_experts, B*P, C_out, H_out, W_out]
+            E, Ccap = dispatch.shape[1], dispatch.shape[2]
 
-            # Reshape [num_experts, B*P, C_out, H_out, W_out] -> [B, P, num_experts, C_out, H_out, W_out]
-            all_outputs = all_outputs.permute(1, 0, 2, 3, 4) # Shape : [B*P, num_experts, C_out, H_out, W_out]
-            C_out, H_out, W_out = all_outputs.shape[2], all_outputs.shape[3], all_outputs.shape[4]
-            all_outputs = all_outputs.reshape(B, P, num_expert, C_out, H_out, W_out)
+            # Patch expert_inputs : [E, Ccap, C, H, W]
+            expert_inputs = X_patches_reshape.new_zeros((E, Ccap, C, H, W))
 
-            # Applied router scores
-            exp_score = exp_scores.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) #Shape : [B, P, num_experts, 1,1,1]
-            output = (all_outputs * exp_score).sum(dim = 2) # Shape : [B, P, C_out, H_out, W_out]
+            n_idx, e_idx, c_idx = self._indices_from_dispatch(dispatch)
+            if n_idx.numel() > 0:
+                expert_inputs[e_idx, c_idx] = X_patches_reshape[n_idx]
+            
+            # Each expert is applied to its input
+            for e , expert in enumerate(experts):
+                # Expert inputs[e] : [Ccap, C, H, W] -> [Ccap, C, H, W]
+                y_e = expert(expert_inputs[e])
+                expert_outputs_list.append(y_e)
+            expert_outputs = torch.stack(expert_outputs_list, dim = 0) # [E, Ccap, C, H, W]
+            C_out, H_out, W_out = expert_outputs.shape[2], expert_outputs.shape[3], expert_outputs.shape[4]
+
+            # Combine outputs : [E, C, H, W]
+            outputs = X_patches_reshape.new_zeros((N, C_out, H_out, W_out))
+            if n_idx.numel() > 0:
+                gates = combine[n_idx, e_idx, c_idx].to(expert_outputs.dtype)
+                contrib = expert_outputs[e_idx, c_idx] * gates.view(-1, 1, 1, 1)
+                outputs.index_add_(0, n_idx, contrib)
 
             # Reassamble patch in in a single image [B, P, C, H ,W] -> [B, C, H, W]
             # and applied final convolution 1x1 
+            outputs = outputs.reshape(B, P, C_out, H_out, W_out)
             output = rearrange(
-                output, 
+                outputs, 
                 'b (h w) c ph pw -> b c (h ph) (w pw)',
                 h = h_patches,
                 w = w_patches
@@ -224,10 +220,98 @@ class PCENetwork(nn.Module):
 
             X = output
 
+            tot_aux_loss += 0.001 * z_loss + 0.05 * aux_loss
+
         # Applying SSP at final experts output
         experts_output = X
         experts_output_pooled = self.pooler(experts_output)
         experts_output_flatten = self.flatten(experts_output_pooled)
         logits = self.linear_layer(experts_output_flatten)
 
-        return logits
+        return logits, aux_loss
+
+    def _indices_from_dispatch(self, dispatch):
+        """
+        Get indices from dispatch
+
+        Args:
+            dispatch (torch.tensor) : tensor of shape [N, E, Ccap]
+        """
+        idx = dispatch.nonzero(as_tuple = False)
+        device = dispatch.device
+        return idx[:, 0], idx[:, 1], idx[:, 2]
+
+    def _router_metrics(self, dispatch, combine, N, E, Ccap):
+        """
+        Get router metrics
+
+        Args:
+            dispatch (torch.tensor) : tensor of shape [N, E, Ccap]
+            combine (torch.tensor) : tensor of shape [N, E, Ccap]
+        """
+        # Get assign patches
+        assign_patches = dispatch.view(N, -1).sum(dim=1)
+        dropped_mask = (assign_patches == 0)
+        dropped_patches = dropped_mask.float().mean().item() # Percentage of dropped patches
+
+        # Get processed patches
+        processed_patches = int((assign_patches > 0).sum().item()) # Number of processed patches
+        capacity_total = E * Ccap
+        capacity_efficiency = (processed_patches / max(1, capacity_total)) # Percentage of capacity used
+
+        # Get usage of experts
+        patches_to_exp = dispatch.any(dim=2) # [N, E]
+        usage_counts = patches_to_exp.sum(dim=0) # [E] Count of patches assigned to each expert
+        usage_frac = (usage_counts.float() / max(1, N)) # [E] Percentage of patches assigned to each expert
+
+        dead_experts = (int(usage_counts == 0).sum().item()) # Number of dead experts
+        alive_experts = (int(usage_counts > 0).sum().item()) # Number of alive experts
+        min_usage = float(usage_frac.min().item()) # Minimum usage of experts
+        max_usage = float(usage_frac.max().item()) # Maximum usage of experts
+        mean_usage = float(usage_frac.mean().item()) # Mean usage of experts
+
+        imbalance_index = (max_uage / max(min_usage, 1e-12)) if E > 1 else 0.0 # Compute imbalance index
+
+        # Compute entropy and normalize it
+        if E > 1:
+            p = usage_frac + 1e-12
+            p = p / p.sum() # Normalize 
+            entropy = float((-(p * p.log()).sum().item())) # Compute shannon entropy
+            entropy_norm = entropy / float(torch.log(torch.tensor(float(E), device=device)).item())
+
+        # Compute mean and std of usage of experts
+        mean_u = float(usage_counts.float().mean().item()) if E > 1 else 0.0 # Mean number of patches assigned to each expert
+        std_u = float(usage_counts.float().std().item()) if E > 1 else 0.0 # Standard deviation of number of patches assigned to each expert
+        cov_usage = float(std_u / max(1e-12, mean_u)) if E > 1 else 0.0 # Covariance of number of patches assigned to each expert
+
+        # Compute capacity usage of experts
+        slot_used = dispatch.any(dim = 0) # [E, Ccap] 
+        capacity_used = slot_used.sum(dim = 1).float() # number of slots used by each expert [E]
+        capacity_ratio_per_exp = (capacity_used / max(1, Ccap)) # percentage of capacity used by each expert [E]
+        mean_capacity_ratio = float(capacity_ratio_per_exp.mean().item()) # mean percentage of capacity used by each expert
+        p95_capacity_ratio = float(capacity_ratio_per_exp.quantile(0.95).item()) # 95th percentile of percentage of capacity used by each expert
+
+        # Collision (Saity check : 0.0)
+        slot_counts = dispatch.sum(dim = 0) # [E, Ccap]
+        collisions = int((slot_counts > 1).sum().item()) # number of collisions
+        max_slot_count = int(slot_counts.max().item()) if slot_counts.numel() else 0 # maximum number of slots used by an expert
+        if collisions >= 0:
+            print(f'=== ALERT : COLLISIONS : {collisions} ===')
+
+        # Gate per patches
+        gate_per_patches = combine.view(N, -1).sum(dim = 1) # [N]
+        mean_gate = float(gate_per_patches.mean().item()) # mean gate per patch
+        p10_gate = float(gate_per_patches.quantile(0.10).item()) # 10th percentile of gate per patch
+        p50_gate = float(gate_per_patches.quantile(0.50).item()) # 50th percentile of gate per patch
+        p90_gate = float(gate_per_patches.quantile(0.90).item()) # 90th percentile of gate per patch
+
+        # Gate per expert
+        gate_per_exp_sum = combine.sum(dim = (0, 2)) # [E]
+        counts = usage_counts.clamp_min(1)
+        avg_gate_per_exp = float(gate_per_exp_sum / counts).float()
+        mean_avg_gate_per_exp = float(avg_gate_per_exp.mean().item()) if E > 1 else 0.0
+        min_avg_gate_per_exp = float(avg_gate_per_exp.min().item()) if E > 1 else 0.0 # Low : router has no confidence in expert
+        max_avg_gate_per_exp = float(avg_gate_per_exp.max().item()) if E > 1 else 0.0 # High : router has confidence in expert
+
+    
+        
