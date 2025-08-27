@@ -24,7 +24,7 @@ The architecture consists of three main components:
   That is, expert index $e$ and gate value $g \in [0,1]$.
 - **Expert Capacity**:
 
-  $C_{\text{cap}} = \lceil \text{capacity\_factor} \cdot \frac{N}{E} \rceil$
+  $C\_{\text{cap}} = \lceil \text{capacity\_factor} \cdot \frac{N}{E} \rceil$
   
   where $N = B \cdot P$ is the total number of patches in the batch and $E$ is the number of experts.
 
@@ -32,10 +32,10 @@ We use Top-1 routing with capacity limiting to restrict the number of patches se
 - **Auxiliary Losses**:
   - **Z-Loss**: To stabilize the logits:
 
-    $\mathcal{L}_{\text{z}} = \frac{1}{N} \sum_{i=1}^{N} \left( \log \left( \sum_{j=1}^{E} e^{l_{i,j}} \right) \right)$
+    $\mathcal{L}\_{\text{z}} = \frac{1}{N} \sum\_{i=1}^{N} \left( \log \left( \sum\_{j=1}^{E} e^{l\_{i,j}} \right) \right)$
   - **Load Balancing Loss**:
 
-    $\mathcal{L}_{\text{balance}} = E \cdot \sum_{e=1}^{E} \text{mean}(p_e) \cdot \text{mean}(a_e)$
+    $\mathcal{L}\_{\text{balance}} = E \cdot \sum\_{e=1}^{E} \text{mean}(p\_e) \cdot \text{mean}(a\_e)$
     where $a_e$ is the allocation (number of patches assigned to expert $e$).
 
 ### Patch Extractor
