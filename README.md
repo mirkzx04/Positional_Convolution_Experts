@@ -12,23 +12,30 @@ The architecture consists of three main components:
 
 ### Router
 - **Gate (Small MLP)**: Uses a two-layer MLP:
-  $$ \text{logits} = W_2 \sigma(W_1 x + b_1) + b_2 $$
+  
+  $\text{logits} = W_2 \sigma(W_1 x + b_1) + b_2$
   where $\sigma = \text{GELU}$.
 - **Expert Probabilities**:
-  $$ p = \text{softmax}(\text{logits}) \in \mathbb{R}^E $$
+
+  $p = \text{softmax}(\text{logits}) \in \mathbb{R}^E$
 - **Top-1 Routing**:
-  $$ e = \arg\max_e p_e, \quad g = \max_e p_e $$
+
+  $ e = \arg\max_e p_e, \quad g = \max_e p_e $
   That is, expert index $e$ and gate value $g \in [0,1]$.
 - **Expert Capacity**:
-  $$ C_{\text{cap}} = \left\lceil \text{capacity\_factor} \cdot \frac{N}{E} \right\rceil $$
+
+  $C_{\text{cap}} = \left\lceil \text{capacity\_factor} \cdot \frac{N}{E} \right\rceil $
+  
   where $N = B \cdot P$ is the total number of patches in the batch and $E$ is the number of experts.
 
 We use Top-1 routing with capacity limiting to restrict the number of patches served by each expert. Tokens beyond the capacity are dropped.
 - **Auxiliary Losses**:
   - **Z-Loss**: To stabilize the logits:
-    $$ \mathcal{L}_{\text{z}} = \frac{1}{N} \sum_{i=1}^{N} \left( \log \left( \sum_{j=1}^{E} e^{l_{i,j}} \right) \right) $$
+
+    $\mathcal{L}_{\text{z}} = \frac{1}{N} \sum_{i=1}^{N} \left( \log \left( \sum_{j=1}^{E} e^{l_{i,j}} \right) \right) $
   - **Load Balancing Loss**:
-    $$ \mathcal{L}_{\text{balance}} = E \cdot \sum_{e=1}^{E} \text{mean}(p_e) \cdot \text{mean}(a_e) $$
+
+    $\mathcal{L}_{\text{balance}} = E \cdot \sum_{e=1}^{E} \text{mean}(p_e) \cdot \text{mean}(a_e)$
     where $a_e$ is the allocation (number of patches assigned to expert $e$).
 
 ### Patch Extractor
@@ -36,11 +43,13 @@ We use Top-1 routing with capacity limiting to restrict the number of patches se
 - **Patch Division**: Extracts $P$ patches per image.
   If the patch has stride $S$, for an image it produces $h_{\text{patch}} = H/S$, $w_{\text{patch}} = W/S$, so $P = h_{\text{patch}} \cdot w_{\text{patch}}$.
 - **Fourier Features**: Concatenates Fourier features to the channels, resulting in:
-  $$ [B \cdot P, (C + C_{\text{fourier}}), H_{\text{patch}}, W_{\text{patch}}] $$
+
+  $[B \cdot P, (C + C_{\text{fourier}}), H_{\text{patch}}, W_{\text{patch}}]$
 
 ### Experts
 Double ResNet block without skip connections:
-$$ \text{Conv}(K=3) \rightarrow \text{BatchNorm} \rightarrow \text{GELU} \rightarrow \text{Dropout} \rightarrow \text{Conv}(K=3) \rightarrow \text{BatchNorm} $$
+
+$\text{Conv}(K=3) \rightarrow \text{BatchNorm} \rightarrow \text{GELU} \rightarrow \text{Dropout} \rightarrow \text{Conv}(K=3) \rightarrow \text{BatchNorm}$
 
 Each expert processes the assigned patches independently. The outputs are then combined based on the routing decisions.
 
