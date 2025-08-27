@@ -24,7 +24,7 @@ The architecture consists of three main components:
   That is, expert index $e$ and gate value $g \in [0,1]$.
 - **Expert Capacity**:
 
-  $\text{C}\_{\text{cap}} = \lceil \text{capacity\_factor} \cdot \frac{N}{E} \rceil$
+  $\mathcal{C}\_{\text{cap}} = \lceil \text{capacity\_factor} \cdot \frac{N}{E} \rceil$
   
   where $N = B \cdot P$ is the total number of patches in the batch and $E$ is the number of experts.
 
