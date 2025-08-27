@@ -25,7 +25,8 @@ The architecture consists of three main components:
 - **Expert Capacity**:
 
   
-
+  $C\_\text{ccap}=\lceil\text{caacity\_factor}\cdot\frac{N}{E}\rceil$
+  
   where $N = B \cdot P$ is the total number of patches in the batch and $E$ is the number of experts.
 
 We use Top-1 routing with capacity limiting to restrict the number of patches served by each expert. Tokens beyond the capacity are dropped.
