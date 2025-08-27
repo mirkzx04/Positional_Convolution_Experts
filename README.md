@@ -20,7 +20,7 @@ The architecture consists of three main components:
   $p = \text{softmax}(\text{logits}) \in \mathbb{R}^E$
 - **Top-1 Routing**:
 
-  $ e = \arg\max_e p_e, \quad g = \max_e p_e $
+  $e = \arg\max_e p_e, \quad g = \max_e p_e$
   That is, expert index $e$ and gate value $g \in [0,1]$.
 - **Expert Capacity**:
 
