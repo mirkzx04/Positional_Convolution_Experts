@@ -25,7 +25,7 @@ The architecture consists of three main components:
 - **Expert Capacity**:
 
   
-  $C_\text{ccap}=\lceil capacity\_factor \cdot\frac{N}{E}\rceil$
+  $C_\text{ccap}=\lceil capacity_factor \cdot\frac{N}{E}\rceil$
 
   where $N = B \cdot P$ is the total number of patches in the batch and $E$ is the number of experts.
 
