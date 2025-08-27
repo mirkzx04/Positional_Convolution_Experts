@@ -24,7 +24,7 @@ The architecture consists of three main components:
   That is, expert index $e$ and gate value $g \in [0,1]$.
 - **Expert Capacity**:
 
-  $C_{\text{cap}} = \left\lceil \text{capacity\_factor} \cdot \frac{N}{E} \right\rceil $
+  $C_{\text{cap}} = \left\lceil \text{capacity\_factor} \cdot \frac{N}{E} \right\rceil$
   
   where $N = B \cdot P$ is the total number of patches in the batch and $E$ is the number of experts.
 
@@ -32,7 +32,7 @@ We use Top-1 routing with capacity limiting to restrict the number of patches se
 - **Auxiliary Losses**:
   - **Z-Loss**: To stabilize the logits:
 
-    $\mathcal{L}_{\text{z}} = \frac{1}{N} \sum_{i=1}^{N} \left( \log \left( \sum_{j=1}^{E} e^{l_{i,j}} \right) \right) $
+    $\mathcal{L}_{\text{z}} = \frac{1}{N} \sum_{i=1}^{N} \left( \log \left( \sum_{j=1}^{E} e^{l_{i,j}} \right) \right)$
   - **Load Balancing Loss**:
 
     $\mathcal{L}_{\text{balance}} = E \cdot \sum_{e=1}^{E} \text{mean}(p_e) \cdot \text{mean}(a_e)$
