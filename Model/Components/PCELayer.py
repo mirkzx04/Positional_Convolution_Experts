@@ -3,6 +3,7 @@ import torch
 from torch import nn
 
 from .ConvExpert import ConvExpert
+from .RouterGate import RouterGate
 
 class PCELayer(nn.Module):
     def __init__(self,
@@ -13,6 +14,7 @@ class PCELayer(nn.Module):
                 patch_size,
                 fourie_freq,
                 gate_channel,
+                hidden_size,
                 ):
         super().__init__()
         self.experts = nn.ModuleList([
@@ -24,10 +26,10 @@ class PCELayer(nn.Module):
             for _ in range(num_experts)
         ])
 
-        flatten_channel = gate_channel * patch_size * patch_size
-        self.router_gate = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(flatten_channel, num_experts)
+        self.router_gate = RouterGate(
+            in_channel=gate_channel,
+            hidden_size=hidden_size,
+            num_experts=num_experts
         )
 
         self.patch_size = patch_size

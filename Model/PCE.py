@@ -20,6 +20,12 @@ class PCENetwork(nn.Module):
                     patch_size,
                     dropout,
                     num_classes,
+                    hidden_size,
+                    capcity_factor_train,
+                    capcity_factor_eval,
+                    router_temp,
+                    load_factor,
+                    noise_epsilon,
                  ):
         super().__init__()
 
@@ -27,15 +33,17 @@ class PCENetwork(nn.Module):
         Constructor of PCE Network
 
         Args : 
-            kernel_sz_exps (int) -> kernel size of experts
-            out_cha_exps // -> out channel for convolution in experts
-            num_experts // -> Number of experts per layer
-            out_cha_router // -> out channel for conv projection in router
-            layer_number // -> Numer of layers
-            dropout (float) -> dropout probability of the convolution experts
-            patch_size (int) -> Size of patches, used in PatchExtractor
-            router (Object.router) -> Router object, used for routing through experts
-            threshold (float) -> Threshold for experts scores, used in router
+            num_experts (int) -> Number of experts
+            layer_number (int) -> Number of layers
+            patch_size (int) -> Size of the patch
+            dropout (float) -> Dropout probability
+            num_classes (int) -> Number of classes
+            hidden_size (int) -> Size of the hidden layer
+            capcity_factor_train (float) -> Capacity factor for training
+            capcity_factor_eval (float) -> Capacity factor for evaluation
+            router_temp (float) -> Router temperature
+            load_factor (float) -> Load factor
+            noise_epsilon (float) -> Noise epsilon
         """
 
         self.num_classes = num_classes
@@ -52,11 +60,17 @@ class PCENetwork(nn.Module):
             num_experts=num_experts,
             dropout=dropout,
             layer_number=layer_number,
+            hidden_size=hidden_size,
         )        
 
         self.router = Router(
             num_experts=num_experts,
             num_layers=layer_number,
+            capcity_factor_train=capcity_factor_train,
+            capcity_factor_eval=capcity_factor_eval,
+            router_temp=router_temp,
+            load_factor=load_factor,
+            noise_epsilon=noise_epsilon,
         )
 
         self.linear_layer = LazyLinear(self.num_classes)
@@ -66,7 +80,7 @@ class PCENetwork(nn.Module):
             num_layers=layer_number,
         )
 
-    def create_layers(self, num_experts, dropout, layer_number):
+    def create_layers(self, num_experts, dropout, layer_number, hidden_size):
         """
         Create layers of PCE Network
 
@@ -102,6 +116,7 @@ class PCENetwork(nn.Module):
                 patch_size=patch_size,
                 fourie_freq=fourier_freq,
                 gate_channel=gate_channel,
+                hidden_size=hidden_size,
             ))
 
             # Update patch size

@@ -26,15 +26,13 @@ from Datasets_Classes.PatchExtractor import PatchExtractor
 
 from Model.PCE import PCENetwork
 
-from Training.Checkpointer import Checkpointer
-from Training.Logger import Logger
-from Training.CheckpointCallBack import CheckpointCallBack
+# from Training.Checkpointer import Checkpointer
+# from Training.Logger import Logger
+# from Training.CheckpointCallBack import CheckpointCallBack
 
 
-from Training.EMA_Diff_Trainer.EMADiffLitModule import EMADiffLitModule
-from Training.EMA_Diff_Trainer.EMADiffLoggerCallBack import EMADiffLoggerCallBack
-
-from PCEScheduler import PCEScheduler
+# from Training.EMA_Diff_Trainer.EMADiffLitModule import EMADiffLitModule
+# from Training.EMA_Diff_Trainer.EMADiffLoggerCallBack import EMADiffLoggerCallBack
 
 def download_tiny_imagenet():
     """
@@ -187,11 +185,15 @@ if __name__ == "__main__":
     lr = 0.0005
     dropout = 0.25
     weight_decay = 2e-4
-    embed_dim = num_exp // 4
+    aux_loss_weight = 0.2
+    hidden_size = 256
 
     # Hyperparameters of router
-    # router_temperature = 0.25
-    nucleus_sampling_p = 0.85
+    router_temp = 0.25
+    load_factor = 0.02
+    noise_epsilon = 1e-2
+    capcity_factor_train = 1.25
+    capcity_factor_eval = 1.50
 
     # Training metrics
     train_epochs = 200
@@ -199,26 +201,22 @@ if __name__ == "__main__":
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
-    print(f"Router: nucleus_sampling_p={nucleus_sampling_p}")
+    print(f"Router: temp={router_temp}, load_factor={load_factor}, noise_epsilon={noise_epsilon}, capcity_factor_train={capcity_factor_train}, capcity_factor_eval={capcity_factor_eval}")
     print(f"Training: epochs={train_epochs}, batch={batch_size}\n")
     print('\n ------------------------ \n')
 
-    # Initialize patch extractor
-    patch_extractor = PatchExtractor(patch_size=patch_size)
-
-
-    # # Create DataLoader for training and validation of all datasets
+    # Create DataLoader for training and validation of all datasets
     # Load Cifar-10 Sets
     cifar10_sets = get_cifar10_sets(batch_size)
     train_datasets.append(cifar10_sets)
 
     # Load TinyImageNet sets
-    # tinyimagenet_sets = get_tinyimagenet_sets(batch_size)
-    # train_datasets.append(tinyimagenet_sets)  
+    tinyimagenet_sets = get_tinyimagenet_sets(batch_size)
+    train_datasets.append(tinyimagenet_sets)  
 
     # Load pascalvoc sets
-    # pascalvoc_sets = get_pascalvoc_sets()
-    # train_datasets.append(pascalvoc_sets)
+    pascalvoc_sets = get_pascalvoc_sets()
+    train_datasets.append(pascalvoc_sets)
 
     #  idx of the dataset : 
     #     0 -> Cifar10
@@ -232,9 +230,6 @@ if __name__ == "__main__":
     validation_loader = train_datasets[dataset_idx]['dataloaders']['val']
     num_classes = train_datasets[dataset_idx]['num_classes']
     class_names = train_datasets[dataset_idx]['unique_lables']
-
-    print(f'--- Dataset loaded --- \n')
-   
     augmentation = DataAgumentation()
 
     # Defines checkpointer and Logger
@@ -258,13 +253,19 @@ if __name__ == "__main__":
         patch_size,
         dropout,
         num_classes,
-        nucleus_sampling_p,
+        hidden_size,
         lr, 
         weight_decay,
         augmentation,
         class_names,
         device,
-        train_epochs
+        train_epochs,
+        aux_loss_weight,
+        router_temp,
+        load_factor,
+        noise_epsilon,
+        capcity_factor_train,
+        capcity_factor_eval,
     )
     trainer = pl.Trainer(
         max_epochs=train_epochs,

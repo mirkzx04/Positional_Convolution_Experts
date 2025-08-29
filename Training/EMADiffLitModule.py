@@ -19,13 +19,19 @@ class EMADiffLitModule(pl.LightningModule):
                 patch_size,
                 dropout,
                 num_classes,
-                nucleus_sampling_p,
+                hidden_size,
                 lr, 
                 weight_decay,
                 augmentation,
                 class_names,
                 device,
                 train_epochs,
+                aux_loss_weight,
+                router_temp,
+                load_factor,
+                noise_epsilon,
+                capcity_factor_train,
+                capcity_factor_eval,
                 log_every_batch = 100
             ):
         
@@ -35,15 +41,23 @@ class EMADiffLitModule(pl.LightningModule):
         Args:
             num_experts (int): Number of experts.
             layer_number (int): Number of layers.
-            patch_size (int): Patch size.
-            dropout (float): Dropout rate.
+            patch_size (int): Size of the patch.
+            dropout (float): Dropout probability.
             num_classes (int): Number of classes.
-            nucleus_sampling_p (float): Nucleus sampling probability.
+            hidden_size (int): Size of the hidden layer.
             lr (float): Learning rate.
             weight_decay (float): Weight decay.
-            augmentation: Data augmentation object.
+            augmentation (object): Augmentation object.
             class_names (list): List of class names.
             device (str): Device to use.
+            train_epochs (int): Number of training epochs.
+            aux_loss_weight (float): Auxiliary loss weight.
+            router_temp (float): Router temperature.
+            load_factor (float): Load factor.
+            noise_epsilon (float): Noise epsilon.
+            capcity_factor_train (float): Capacity factor for training.
+            capcity_factor_eval (float): Capacity factor for evaluation.
+            log_every_batch (int): Log every batch.
         Returns:
             None
         """
@@ -56,7 +70,12 @@ class EMADiffLitModule(pl.LightningModule):
             patch_size = patch_size,
             dropout=dropout,
             num_classes=num_classes,
-            nucleus_sampling_p=nucleus_sampling_p
+            hidden_size=hidden_size,
+            capcity_factor_train=capcity_factor_train,
+            capcity_factor_eval=capcity_factor_eval,
+            router_temp=router_temp,
+            load_factor=load_factor,
+            noise_epsilon=noise_epsilon,
         )
 
         self.lr = lr
@@ -80,7 +99,7 @@ class EMADiffLitModule(pl.LightningModule):
         # Best validation loss
         self.best_val_loss = float('+inf')
 
-        self.aux_loss_weight = 0.002
+        self.aux_loss_weight = aux_loss_weight
 
         # Accuracy metrics
         self.accuracy_metrics = {
