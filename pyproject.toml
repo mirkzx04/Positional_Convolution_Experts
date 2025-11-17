@@ -1,0 +1,18 @@
+[project]
+name = "positionalconvolutionrouting"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "einops>=0.8.1",
+    "matplotlib>=3.10.3",
+    "opencv-python>=4.11.0.86",
+    "pandas>=2.2.3",
+    "procrustes>=0.2.1",
+    "pytorch-lightning>=2.5.5",
+    "scikit-learn>=1.6.1",
+    "torchmetrics>=1.7.3",
+    "tqdm>=4.67.1",
+    "wandb>=0.20.1",
+]
