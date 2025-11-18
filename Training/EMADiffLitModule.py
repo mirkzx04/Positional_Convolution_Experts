@@ -8,7 +8,7 @@ import wandb as wb
 import math
 
 from torch.nn import functional as F
-from torch.optim import AdamW
+from torch.optim import AdamW, Adam
 from torchvision.transforms import ToPILImage
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, SequentialLR
 
@@ -380,10 +380,9 @@ class EMADiffLitModule(pl.LightningModule):
                 cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
                 return (1.0 - eta_min) * cosine_decay + eta_min
 
-            
         def router_lr_lambda(epoch):
             if epoch < router_start_epoch : 
-                return 0.0
+                return 1.0
             elif epoch < router_start_epoch + router_warmup_epoch : 
                 step = epoch - router_start_epoch
                 warmup_factor = float(step + 1) / float(router_warmup_epoch)
@@ -396,7 +395,7 @@ class EMADiffLitModule(pl.LightningModule):
                 return router_mul * ((1.0 - eta_min) * cosine_decay + eta_min)
         
         # Optimizer
-        self.optimizer = AdamW(
+        self.optimizer = Adam(
             [
                 {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
                 {'params': self.router_w, 'lr': base_lr * router_mul, 'weight_decay': 0, 'name' : 'router_w'},

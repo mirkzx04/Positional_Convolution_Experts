@@ -186,18 +186,18 @@ if __name__ == "__main__":
     capacity_factor_train = 1.50
     capacity_factor_val = 1.75
 
-    alpha_init = 2e-1
-    alpha_final = 1.5e-1
-    alpha_epochs = 150
+    alpha_init = 2e-2
+    alpha_final = 1e-3
+    alpha_epochs = 100
 
     temp_init = 5.0
-    temp_final = 2
+    temp_final = 3.5
     temp_epochs = 150
 
     # Training metrics
     train_epochs = 200
     uniform_epochs = 30
-    batch_size = 128
+    batch_size = 256
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
