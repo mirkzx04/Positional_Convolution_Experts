@@ -362,59 +362,38 @@ class EMADiffLitModule(pl.LightningModule):
         wd = self.weight_decay
         total_epochs = self.train_epochs
 
-        router_mul = 1.0
-        warmup_len = 15             
-        router_start_epoch = 30     
-        decay_start_epoch = 45      
+        router_mul = 0.3
+        warmup_backbone = 10
+        router_start_epoch = 30
+        router_warmup_epoch = 5
         eta_min = 1e-5
 
         # Warmup -> Cosine
         def backbone_lr_lambda(epoch):
-            # Initial warmuo 0 -> 15
-            if epoch <= warmup_len:
-                return float(epoch + 1) / float(warmup_len)
-            
-            # Cosine Decay 15 -> 30
-            elif epoch < router_start_epoch:
-                T_max = router_start_epoch - warmup_len 
-                progress = (epoch - warmup_len) / T_max
-                progress = min(progress, 1.0)
-        
-                cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
-                return (1 - eta_min) * cosine_decay + eta_min
-            
-            # Re-Warmup 30 -> 45
-            # elif router_start_epoch <= epoch <= 35:
-        
-            #     step = epoch - router_start_epoch
-            #     return float(step + 1) / float(router_start_epoch)
-            
-            else:
-                T_max = total_epochs - decay_start_epoch
-                progress = (epoch - decay_start_epoch) / T_max
-                progress = min(progress, 1.0)
-                
-                cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
-                return (1 - eta_min) * cosine_decay + eta_min
+            # Initial warmuo 0 -> 10
+            if epoch <= warmup_backbone:
+                return float(epoch + 1) / float(warmup_backbone)
+            # Cosine scheduling 
+            else : 
+                progress = (epoch - warmup_backbone) / float(total_epochs - warmup_backbone)
+                progress = min(max(progress, 0.0), 1.0)
+                cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return (1.0 - eta_min) * cosine_decay + eta_min
+
             
         def router_lr_lambda(epoch):
-            # Uniform phase
-            if epoch < router_start_epoch:
-                return 1.0
-            
-            # Warmup
-            # elif router_start_epoch <= epoch <= 35:
-            #     step = epoch - router_start_epoch
-            #     return float(step + 1) / float(35)
-            
-            # Cosine
-            else:
-                T_max = total_epochs - decay_start_epoch
-                progress = (epoch - decay_start_epoch) / T_max
-                progress = min(progress, 1.0)
-                
-                cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
-                return (1 - eta_min) * cosine_decay + eta_min
+            if epoch < router_start_epoch : 
+                return 0.0
+            elif epoch < router_start_epoch + router_warmup_epoch : 
+                step = epoch - router_start_epoch
+                warmup_factor = float(step + 1) / float(router_warmup_epoch)
+                return router_mul * warmup_factor
+            else : 
+                start = router_start_epoch + router_warmup_epoch
+                progress = (epoch - start) / float(total_epochs - start)
+                progress = min(max(progress, 0.0), 1.0)
+                cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return router_mul * ((1.0 - eta_min) * cosine_decay + eta_min)
         
         # Optimizer
         self.optimizer = AdamW(

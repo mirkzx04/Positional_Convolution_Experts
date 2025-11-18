@@ -186,18 +186,18 @@ if __name__ == "__main__":
     capacity_factor_train = 1.50
     capacity_factor_val = 1.75
 
-    alpha_init = 1.5e-1
-    alpha_final = 2.5e-2
-    alpha_epochs = 75
+    alpha_init = 2e-1
+    alpha_final = 1.5e-1
+    alpha_epochs = 150
 
     temp_init = 5.0
     temp_final = 2
-    temp_epochs = 50
+    temp_epochs = 150
 
     # Training metrics
     train_epochs = 200
     uniform_epochs = 30
-    batch_size = 512
+    batch_size = 128
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
@@ -239,7 +239,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-41'
+        name = 'Test-42'
     )
 
     checkpoint_callback = ModelCheckpoint(
