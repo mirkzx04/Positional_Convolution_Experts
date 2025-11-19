@@ -207,8 +207,9 @@ class Router(nn.Module):
         # Zero losses during uniform routing
         z_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         aux_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
+        div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         
-        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
+        return dispatch, combine, z_loss, aux_loss, div_loss, logits_std, logits.detach().cpu()
 
     def z_loss(self, logits):
         """

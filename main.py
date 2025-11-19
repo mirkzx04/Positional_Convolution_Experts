@@ -233,7 +233,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-43'
+        name = 'Test-44'
     )
 
     checkpoint_callback = ModelCheckpoint(
