@@ -1,7 +1,4 @@
-import imp
 import os
-
-import io
 import tarfile
 import urllib.request
 import numpy as np 
@@ -30,10 +27,6 @@ def download_tiny_imagenet():
     """
     Download the Tiny ImageNet dataset.
     """
-    import os
-    import requests
-    from zipfile import ZipFile
-
     url = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
     filename = "tiny-imagenet-200.zip"
     tiny_dir = "./Data/tiny-imagenet-200"
@@ -183,21 +176,22 @@ if __name__ == "__main__":
     noise_epsilon = 0.2
     noise_std = 1.0
 
-    capacity_factor_train = 1.50
-    capacity_factor_val = 1.75
+    capacity_factor_train = 2.0
+    capacity_factor_val = 2.0
 
-    alpha_init = 2e-2
-    alpha_final = 1e-3
-    alpha_epochs = 100
+    alpha_init = 1e-2
+    alpha_final = 5e-4
+    alpha_epochs = 120
 
-    temp_init = 5.0
-    temp_final = 3.5
+    temp_init = 3.0
+    temp_mid = 1.5
+    temp_final = 0.8
     temp_epochs = 150
 
     # Training metrics
     train_epochs = 200
     uniform_epochs = 30
-    batch_size = 256
+    batch_size = 128
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
@@ -239,7 +233,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-42'
+        name = 'Test-43'
     )
 
     checkpoint_callback = ModelCheckpoint(

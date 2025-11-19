@@ -142,7 +142,7 @@ class EMADiffLitModule(pl.LightningModule):
         else:
             data = self.augmentation(data)
 
-        logits, z_loss, imb_loss = self(data)
+        logits, z_loss, imb_loss, div_loss = self(data)
 
         if batch_idx % self.log_every_batch == 0:
             probabilities = F.softmax(logits, dim=1)
@@ -159,7 +159,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.train_loss(logits, labels)
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * 1e-3)
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * 1e-3) + (div_loss * 1e-3)
         total_loss = class_loss + aux_loss
 
         self.train_class_losses.append(class_loss.item())
@@ -213,30 +213,53 @@ class EMADiffLitModule(pl.LightningModule):
 
             self.aux_loss_weight = self.aux_loss_scheduler_step()
             self.model.router.router_temp = self.temp_scheduler_step()
+            self.model.router.capacity_factor_train = self.capacity_factor_scheduler_step()
 
+    #----- SCHEDULERS -----
     def temp_scheduler_step(self):
         if self.current_epoch < self.start_epoch_scheduling:
             return self.temp_init
-        if self.current_epoch > self.temp_epochs:
-            return self.temp_final
         
-        t = (self.current_epoch - self.start_epoch_scheduling) / (self.temp_epochs - self.start_epoch_scheduling)
-        ramp = 0.5 * (1.0 - math.cos(math.pi * t))
-        temp = self.temp_init + (self.temp_final - self.temp_init) * ramp
-        return temp
+        # Early specialization, rapid decay
+        if self.current_epoch < 80:
+            t = (self.current_epoch - self.start_epoch_scheduling) / (80 - self.start_epoch_scheduling)
+            
+            temp = self.temp_init * (self.temp_mid / self.temp_init) ** t # Exponential decay
+
+            return temp
+        
+        if e < self.temp_epochs:
+            t = (self.current_epoch - 80) / (self.temp_epochs - 80)
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * t))
+            temp = self.temp_final + (self.temp_mid - self.temp_final) * cosine_decay # Cosine annealing
+            
+            return temp
+        
+        return self.temp_final
+    
     def aux_loss_scheduler_step(self):
         if self.current_epoch < self.start_epoch_scheduling:
-            return self.alpha_init
-        if self.current_epoch > self.temp_epochs:
-            return self.alpha_final
+            return 0.0 # No aux loss during uniform phase
+        if self.current_epoch > self.aux_epochs:
+            return self.aux_loss_final
         
-        decay_duration = self.temp_epochs - self.start_epoch_scheduling         
-        steps_in_decay = self.current_epoch - self.start_epoch_scheduling
-        
-        progress = steps_in_decay / decay_duration
-        alpha = self.alpha_init + (self.alpha_final - self.alpha_init) * progress
-        
-        return alpha
+        # Cosine annealing 
+        t = (self.current_epoch - self.start_epoch_scheduling) / (self.alpha_epochs - self.start_epoch_scheduling)
+        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * t))
+        aux_loss = self.aux_loss_final + (self.aux_loss_init - self.aux_loss_final) * cosine_decay
+        return aux_loss
+
+    def capacity_factor_scheduler_step(self):
+        if self.current_epoch < self.uniform_epochs: 
+            return 2.0
+        elif self.current_epoch < 80:
+            # Gradually recude capacity 
+            progress = (self.current_epoch - self.uniform_epochs) / (80 - self.uniform_epochs)
+            
+            return 2.0 - 0.5 * progress  
+        else:
+            return 1.25
+        # ----- SCHEDULERS -----
 
     def on_train_epoch_end(self):
         """
@@ -285,7 +308,7 @@ class EMADiffLitModule(pl.LightningModule):
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
         
-        logits, z_loss, imb_loss = self(data)
+        logits, z_loss, imb_loss, div_loss = self(data)
 
         if batch_idx % self.log_every_batch == 0:
             probabilities = F.softmax(logits, dim=1)
@@ -302,7 +325,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.val_loss(logits, labels)
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * 1e-3)
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * 1e-3) + (div_loss * 1e-3)
         total_loss = class_loss + aux_loss   
 
         self.val_class_losses.append(class_loss.item())
@@ -362,11 +385,11 @@ class EMADiffLitModule(pl.LightningModule):
         wd = self.weight_decay
         total_epochs = self.train_epochs
 
-        router_mul = 0.3
+        router_mul = 0.5
         warmup_backbone = 10
         router_start_epoch = 30
-        router_warmup_epoch = 5
-        eta_min = 1e-5
+        router_warmup_epoch = 10
+        eta_min = 5e-6
 
         # Warmup -> Cosine
         def backbone_lr_lambda(epoch):
@@ -398,8 +421,8 @@ class EMADiffLitModule(pl.LightningModule):
         self.optimizer = Adam(
             [
                 {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
-                {'params': self.router_w, 'lr': base_lr * router_mul, 'weight_decay': 0, 'name' : 'router_w'},
-                {'params' : self.router_bias, 'lr' : base_lr * router_mul, 'weight_decay': 0, 'name' : 'router_bias'}
+                {'params': self.router_w, 'lr': base_lr * router_mul, 'weight_decay': wd, 'name' : 'router_w'},
+                {'params' : self.router_bias, 'lr' : base_lr * router_mul * 1.5, 'weight_decay': 0, 'name' : 'router_bias'}
             ]
         )
 

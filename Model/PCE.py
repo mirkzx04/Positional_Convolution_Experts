@@ -177,6 +177,7 @@ class PCENetwork(nn.Module):
 
         tot_z_loss = 0.0
         tot_imb_loss = 0.0
+        tot_div_loss = 0.0
 
         for layer_idx, layer in enumerate(self.layers):
             # Layer components
@@ -191,7 +192,7 @@ class PCENetwork(nn.Module):
             B, P, C, H, W = X_patches.shape
             N = B * P
 
-            dispatch, combine, z_loss, imb_loss, logits_std, logits = self.router(
+            dispatch, combine, z_loss, imb_loss, div_loss, logits_std, logits = self.router(
                 X_positional, 
                 router_gate, 
                 current_epoch,
@@ -247,6 +248,7 @@ class PCENetwork(nn.Module):
 
             tot_z_loss += z_loss
             tot_imb_loss += imb_loss
+            tot_div_loss += div_loss
 
         # Applying SSP at final experts output
         experts_output = X
@@ -256,7 +258,7 @@ class PCENetwork(nn.Module):
         # norm_out = self.normal(experts_output)
         logits = self.linear_layer(experts_output_flatten)
 
-        return logits, tot_z_loss, tot_imb_loss
+        return logits, tot_z_loss, tot_imb_loss, tot_div_loss
 
     def _indices_from_dispatch(self, dispatch):
         """
