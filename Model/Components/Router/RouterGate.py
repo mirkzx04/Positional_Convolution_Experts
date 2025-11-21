@@ -51,7 +51,9 @@ class RouterGate(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
             elif '2' in name:
-                nn.init.normal_(module.weight, mean = 0.0, std = 0.01)
+                nn.init.normal_(module.weight, mean = 0.0, std = 0.3)
+                nn.init.xavier_uniform_(module.weight, gain=1.0)
+
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 

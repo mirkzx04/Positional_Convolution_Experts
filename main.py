@@ -180,18 +180,18 @@ if __name__ == "__main__":
     capacity_factor_val = 2.0
 
     alpha_init = 1e-2
-    alpha_final = 5e-4
-    alpha_epochs = 120
+    alpha_final = 5e-2
+    alpha_epochs = 100
 
     temp_init = 3.0
-    temp_mid = 1.5
-    temp_final = 0.8
+    temp_mid = 2.0
+    temp_final = 1.5
     temp_epochs = 150
 
     # Training metrics
     train_epochs = 200
     uniform_epochs = 30
-    batch_size = 128
+    batch_size = 256
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
@@ -233,7 +233,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-44'
+        name = 'Test-47'
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -260,7 +260,7 @@ if __name__ == "__main__":
     lit_module = EMADiffLitModule(
         pce=pce, lr=lr, weight_decay=weight_decay, device=device, class_names=class_names, 
         train_epochs=train_epochs, uniform_epochs=uniform_epochs, alpha_init=alpha_init, 
-        alpha_final=alpha_final, alpha_epochs=alpha_epochs, temp_init=temp_init, temp_final=temp_final,
+        alpha_final=alpha_final, alpha_epochs=alpha_epochs, temp_init=temp_init, temp_mid = temp_mid, temp_final=temp_final,
         temp_epochs=temp_epochs
     )
     trainer = pl.Trainer(
