@@ -164,7 +164,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.train_loss(logits, labels)
-        aux_loss = (imb_loss * 0.01) + (z_loss * 1e-3)
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * 1e-3)
         total_loss = class_loss + aux_loss
 
         self.train_class_losses.append(class_loss.item())
@@ -242,20 +242,30 @@ class EMADiffLitModule(pl.LightningModule):
         return self.temp_final
 
     def alpha_scheduler(self):
-        t0 = self.router_start_epoch
-        tw = self.router_warmup_epoch
+        epoch = self.current_epoch
+        alpha_init  = self.alpha_init
+        alpha_final = self.alpha_final
 
-        e = self.current_epoch
+        t0 = self.router_start_epoch          
+        tw = self.router_warmup_epoch         
+        te = self.temp_epochs
 
-        if e < 0:
-            return self.alpha_init
-        
-        if e < t0 + tw : 
-            progress = (e - t0 + 1) / float(max(1, tw))
-            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))
-            return self.alpha_init + (self.alpha_final - self.alpha_init) * cosine_inc
+        if epoch < t0:
+            return alpha_init
 
-        return self.alpha_final
+        if epoch < t0 + tw:
+            s = (epoch - t0 + 1) / float(max(1, tw))   # (0,1]
+            alpha_mid = 0.5 * (alpha_init + alpha_final)
+            return alpha_init + s * (alpha_mid - alpha_init)
+
+        if epoch < te:
+            progress = (epoch - (t0 + tw)) / float(max(1, te - (t0 + tw)))
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))  # 0→1
+            alpha_mid = 0.5 * (alpha_init + alpha_final)
+            return alpha_mid + (alpha_final - alpha_mid) * cosine_inc
+
+        return alpha_final
 
     def on_train_epoch_end(self):
         """
@@ -321,7 +331,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.val_loss(logits, labels)
-        aux_loss = (imb_loss * 0.02) + (z_loss * 1e-3)
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * 1e-3)
         total_loss = class_loss + aux_loss   
 
         self.val_class_losses.append(class_loss.item())
