@@ -27,7 +27,7 @@ class PCELayer(nn.Module):
             )
             for _ in range(num_experts)
         ])
-        
+
         self.router_gate = RouterGate(gate_channel, hidden_size, num_experts)
         hidden_channel = out_channel * 4
 
