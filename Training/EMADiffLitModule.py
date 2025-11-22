@@ -69,7 +69,10 @@ class EMADiffLitModule(pl.LightningModule):
         self.temp_final = temp_final
         self.temp_epochs = temp_epochs
 
-        self.start_epoch_scheduling = 30
+        self.router_mul = 5.0
+        self.warmup_backbone = 10
+        self.router_start_epoch = 30
+        self.router_warmup_epoch = 10
 
         # Training and log utilites
         self.augmentation = DataAgumentation()
@@ -144,7 +147,7 @@ class EMADiffLitModule(pl.LightningModule):
         else:
             data = self.augmentation(data)
 
-        logits, z_loss, imb_loss, div_loss = self(data)
+        logits, z_loss, imb_loss = self(data)
 
         if batch_idx % self.log_every_batch == 0:
             probabilities = F.softmax(logits, dim=1)
@@ -161,7 +164,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.train_loss(logits, labels)
-        aux_loss = (imb_loss * 0.01) + (z_loss * 1e-6) + (div_loss * 5e-3)
+        aux_loss = (imb_loss * 0.01) + (z_loss * 1e-3)
         total_loss = class_loss + aux_loss
 
         self.train_class_losses.append(class_loss.item())
@@ -215,53 +218,44 @@ class EMADiffLitModule(pl.LightningModule):
 
             self.aux_loss_weight = self.aux_loss_scheduler_step()
             self.model.router.router_temp = self.temp_scheduler_step()
-            self.model.router.capacity_factor_train = self.capacity_factor_scheduler_step()
 
     #----- SCHEDULERS -----
     def temp_scheduler_step(self):
-        if self.current_epoch < self.start_epoch_scheduling:
+        t0 = self.router_start_epoch
+        tw = self.router_warmup_epoch
+
+        tdec = max(self.temp_epochs, t0  + tw + 1)
+
+        e = self.current_epoch
+
+        # During warmup and uniform phases
+        if e < t0 or self.current_epoch < t0 + tw:
             return self.temp_init
         
-        # Early specialization, rapid decay
-        if self.current_epoch < 80:
-            t = (self.current_epoch - self.start_epoch_scheduling) / (80 - self.start_epoch_scheduling)
-            
-            temp = self.temp_init * (self.temp_mid / self.temp_init) ** t # Exponential decay
-
-            return temp
-        
-        if self.current_epoch < self.temp_epochs:
-            t = (self.current_epoch - 80) / (self.temp_epochs - 80)
-            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * t))
-            temp = self.temp_final + (self.temp_mid - self.temp_final) * cosine_decay # Cosine annealing
-            
-            return temp
+        # Cosine decay
+        if e < tdec:
+            progress = (self.current_epoch - (t0 + tw)) / float(max(1, tdec - (t0 + tw)))
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))
+            return self.temp_init + (self.temp_final - self.temp_init) * cosine_inc
         
         return self.temp_final
-    
-    def aux_loss_scheduler_step(self):
-        if self.current_epoch < self.start_epoch_scheduling:
-            return 0.0 # No aux loss during uniform phase
-        if self.current_epoch > self.alpha_epochs:
-            return self.alpha_final
-        
-        # Cosine annealing 
-        t = (self.current_epoch - self.start_epoch_scheduling) / (self.alpha_epochs - self.start_epoch_scheduling)
-        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * t))
-        aux_loss = self.alpha_final + (self.alpha_init - self.alpha_final) * cosine_decay
-        return aux_loss
 
-    def capacity_factor_scheduler_step(self):
-        if self.current_epoch < self.uniform_epochs: 
-            return 2.0
-        elif self.current_epoch < 80:
-            # Gradually reduce capacity 
-            progress = (self.current_epoch - self.uniform_epochs) / (80 - self.uniform_epochs)
-            
-            return 2.0 - 0.5 * progress  
-        else:
-            return 1.5
-        # ----- SCHEDULERS -----
+    def alpha_scheduler(self):
+        t0 = self.router_start_epoch
+        tw = self.router_warmup_epoch
+
+        e = self.current_epoch
+
+        if e < 0:
+            return self.alpha_init
+        
+        if e < t0 + tw : 
+            progress = (e - t0 + 1) / float(max(1, tw))
+            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))
+            return self.alpha_init + (self.alpha_final - self.alpha_init) * cosine_inc
+
+        return self.alpha_final
 
     def on_train_epoch_end(self):
         """
@@ -310,7 +304,7 @@ class EMADiffLitModule(pl.LightningModule):
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
         
-        logits, z_loss, imb_loss, div_loss = self(data)
+        logits, z_loss, imb_loss = self(data)
 
         if batch_idx % self.log_every_batch == 0:
             probabilities = F.softmax(logits, dim=1)
@@ -327,7 +321,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.val_loss(logits, labels)
-        aux_loss = (imb_loss * 0.01) + (z_loss * 1e-6) + (div_loss * 5e-3)
+        aux_loss = (imb_loss * 0.02) + (z_loss * 1e-3)
         total_loss = class_loss + aux_loss   
 
         self.val_class_losses.append(class_loss.item())
@@ -387,45 +381,40 @@ class EMADiffLitModule(pl.LightningModule):
         wd = self.weight_decay
         total_epochs = self.train_epochs
 
-        router_mul = 10.0
-        warmup_backbone = 10
-        router_start_epoch = 30
-        router_warmup_epoch = 10
         eta_min = 5e-6
 
         # Warmup -> Cosine
-        def backbone_lr_lambda(epoch):
-            # Initial warmuo 0 -> 10
-            if epoch <= warmup_backbone:
-                return float(epoch + 1) / float(warmup_backbone)
-            # Cosine scheduling 
-            else : 
-                progress = (epoch - warmup_backbone) / float(total_epochs - warmup_backbone)
-                progress = min(max(progress, 0.0), 1.0)
-                cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
-                return (1.0 - eta_min) * cosine_decay + eta_min
+        def backbone_lr_lambda(epoch: int):
+            if epoch <= self.warmup_backbone:
+                return float(epoch + 1) / float(self.warmup_backbone)
+            
+            # Cosine scheduling
+            progress = (epoch - self.warmup_backbone) / float(max(1, total_epochs - self.warmup_backbone))
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return (1.0 - eta_min) * cosine_decay + eta_min
 
         def router_lr_lambda(epoch):
-            if epoch < router_start_epoch : 
-                return 1.0
-            elif epoch < router_start_epoch + router_warmup_epoch : 
-                step = epoch - router_start_epoch
-                warmup_factor = float(step + 1) / float(router_warmup_epoch)
-                return warmup_factor
-            else : 
-                start = router_start_epoch + router_warmup_epoch
-                progress = (epoch - start) / float(total_epochs - start)
-                progress = min(max(progress, 0.0), 1.0)
-                cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
-                return (1.0 - eta_min) * cosine_decay + eta_min
+            if epoch < self.router_start_epoch:
+                return 0.0  
+            if epoch < self.router_start_epoch + self.router_warmup_epoch:
+                s = (epoch - self.router_start_epoch + 1) / float(self.router_warmup_epoch)  # s ∈ (0,1]
+                start_factor = 1.0 / float(self.router_mul)
+                return start_factor + s * (1.0 - start_factor)
+            
+            start = self.router_start_epoch + self.router_warmup_epoch
+            progress = (epoch - start) / float(max(1, total_epochs - start))
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return (1.0 - eta_min) * cosine_decay + eta_min
         
         # Optimizer
-        self.optimizer = Adam(
+        self.optimizer = AdamW(
             [
                 {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
-                {'params': self.router_w, 'lr': base_lr * router_mul, 'weight_decay': 0, 'name' : 'router_w'},
-                {'params' : self.router_bias, 'lr' : base_lr * router_mul, 'weight_decay': 0, 'name' : 'router_bias'}
-            ]
+                {'params': self.router_w, 'lr': base_lr * self.router_mul, 'weight_decay': 0, 'name' : 'router_w'},
+                {'params' : self.router_bias, 'lr' : base_lr * self.router_mul, 'weight_decay': 0, 'name' : 'router_bias'}
+            ], betas=(0.9, 0.999)
         )
 
         self.lr_scheduler = LambdaLR(self.optimizer, lr_lambda=[

@@ -63,21 +63,16 @@ class Router(nn.Module):
 
         # Always compute logits for monitoring and potential use
         logits = router_gate(X).to(dtype=torch.float32) # [N, num_experts]
-        logits_std = logits.detach().std().item()
+        logits_temp = logits / self.router_temp
+        logits_temp = logits_temp.clamp(min = -10.0, max = 10.0)
 
-        # Clamp logits
-        logits = logits.clamp(min = -10.0, max = 10.0)
-
-        # Apply router temp
-        logits = logits / self.router_temp
-        
-        # Calculate logits std for monitoring (detached from grad)
+        logits_std = logits_temp.detach().std().item()
         
         # Route based on current phase
         if current_epoch <= 30:
-            return self._uniform_routing(X, logits, logits_std)
+            return self._uniform_routing(X, logits_temp, logits_std)
         else:  # specialized
-            return self._specialized_routing(X, logits, logits_std)
+            return self._specialized_routing(X, logits_temp, logits_std)
 
     def _specialized_routing(self, X, logits, logits_std):
         """
@@ -89,7 +84,7 @@ class Router(nn.Module):
         E = self.num_experts
         
         z_loss = self.z_loss(logits)
-        diverity_loss = self.diverity_loss(logits)
+        # diverity_loss = self.diverity_loss(logits)
         # z_loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
 
         # Add noise to logits in training mode
@@ -160,7 +155,7 @@ class Router(nn.Module):
         # Dispatch: boolean mask indicating which (token, expert, position) combinations are active
         dispatch = (combine > 0).to(torch.bool)
 
-        return dispatch, combine, z_loss, aux_loss, diverity_loss, logits_std, logits.detach().cpu()
+        return dispatch, combine, z_loss, aux_loss , logits_std, logits.detach().cpu()
 
     def _uniform_routing(self, X, logits, logits_std):
         """
@@ -207,9 +202,9 @@ class Router(nn.Module):
         # Zero losses during uniform routing
         z_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         aux_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
-        div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
+        # div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         
-        return dispatch, combine, z_loss, aux_loss, div_loss, logits_std, logits.detach().cpu()
+        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
 
     def z_loss(self, logits):
         """

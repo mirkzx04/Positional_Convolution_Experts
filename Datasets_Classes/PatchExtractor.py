@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 
 class PatchExtractor(nn.Module):
-    def __init__(self, patch_size, num_frequencies = 4):
+    def __init__(self, patch_size, num_frequencies = 3):
         super().__init__()
         self.patch_size = patch_size
         self.num_frequencies = num_frequencies
@@ -105,8 +105,8 @@ class PatchExtractor(nn.Module):
 
         # pixel_feats = torch.cat([xx_feat, yy_feat, xx_fourier, yy_fourier], dim = 2)
 
-        # patches = patches.to(image.device)
-        # patches_with_coords = torch.cat([patches, patch_pos_feats], dim = 2)
+        patches = patches.to(image.device)
+        patches_with_coords = torch.cat([patches, patch_pos_feats], dim = 2)
         
-        return h_patches, w_patches, patch_pos_feats, patches
-        # return patches, patches_with_coords, h_patches, w_patches
+        # return h_patches, w_patches, patch_pos_feats, patches
+        return h_patches, w_patches , patches_with_coords, patches

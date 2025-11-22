@@ -176,17 +176,17 @@ if __name__ == "__main__":
     noise_epsilon = 0.2
     noise_std = 1.0
 
-    capacity_factor_train = 2.0
+    capacity_factor_train = 1.75
     capacity_factor_val = 2.0
 
-    alpha_init = 1e-2
-    alpha_final = 5e-2
+    alpha_init = 1e-4
+    alpha_final = 1e-3
     alpha_epochs = 100
 
-    temp_init = 3.0
-    temp_mid = 2.0
-    temp_final = 1.5
-    temp_epochs = 150
+    temp_init = 3.5
+    temp_mid = 2.5
+    temp_final = 5.0
+    temp_epochs = 100
 
     # Training metrics
     train_epochs = 200
@@ -233,7 +233,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-47'
+        name = 'Test-51'
     )
 
     checkpoint_callback = ModelCheckpoint(

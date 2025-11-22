@@ -8,9 +8,10 @@ class RouterGate(nn.Module):
         super().__init__()
         
         # self.projection = nn.Linear(in_channel, out_channel)
-        self.norm = nn.LayerNorm(2 * in_channel)
+        in_size = 2 * in_channel
+        self.norm = nn.LayerNorm(in_size)
         self.mlp = nn.Sequential(
-            nn.Linear(2 * in_channel, hidden_size),
+            nn.Linear(in_size, hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, num_experts)
         )
