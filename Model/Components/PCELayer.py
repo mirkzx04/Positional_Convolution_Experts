@@ -40,6 +40,7 @@ class PCELayer(nn.Module):
             ),
             nn.GroupNorm(num_groups=min(8, hidden_channel), num_channels=hidden_channel),
             nn.SiLU(inplace=True),
+            # nn.Dropout2d(dropout),
 
             nn.Conv2d(
                 in_channels=hidden_channel,
@@ -49,6 +50,7 @@ class PCELayer(nn.Module):
             ),
             nn.GroupNorm(num_groups=min(8, hidden_channel), num_channels=hidden_channel),
             nn.SiLU(inplace=True),
+            # nn.Dropout2d(dropout),
 
             nn.Conv2d(
                 in_channels=hidden_channel,

@@ -11,9 +11,9 @@ class RouterGate(nn.Module):
         in_size = 2 * in_channel
         self.norm = nn.LayerNorm(in_size)
         self.mlp = nn.Sequential(
-            nn.Linear(in_size, hidden_size),
+            nn.Linear(in_size, hidden_size, bias=True),
             nn.GELU(),
-            nn.Linear(hidden_size, num_experts)
+            nn.Linear(hidden_size, num_experts, bias=True)
         )
         # self.head_w = nn.Parameter(
         #     torch.empty(out_channel, num_experts)
@@ -24,7 +24,7 @@ class RouterGate(nn.Module):
         #     torch.tensor(float(10.0)).log()
         # )
         # self.bias = nn.Parameter(torch.zeros(num_experts))
-        # self.initialize_weights()
+        self.initialize_weights()
 
     def forward(self, X):
         X = X.to(dtype=torch.float32) # [B*P, C, H, W]
@@ -38,6 +38,8 @@ class RouterGate(nn.Module):
         # Norm and MLP
         X_norm = self.norm(X_cat).to(dtype=torch.float32)
         logits = self.mlp(X_norm).to(dtype=torch.float32)
+        logits = logits - logits.mean(dim = -1, keepdim = True)
+        
         # logits_norm = F.normalize(logits, dim = -1)
         # w_n = F.normalize(self.head_w, dim = 0)
         # scale = self.logit_scale.exp().clamp(1.0, 100.0)
@@ -46,23 +48,8 @@ class RouterGate(nn.Module):
         return logits.to(dtype=torch.float32)
 
     def initialize_weights(self):
-        for name, module in self.mlp.named_modules():
-            if '0' in name:
-                nn.init.xavier_normal_(module.weight)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif '2' in name:
-                nn.init.normal_(module.weight, mean = 0.0, std = 0.3)
-                nn.init.xavier_uniform_(module.weight, gain=1.0)
-
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-
-                
-                actual_std = module.weight.std().item()
-                actual_mean = module.weight.mean().item()
-
-                print('Router gate')
-                print('tgt = mean 0.0, std = 0.01')
-                print(f'actual mean = {actual_mean:.6f}, actual std = {actual_std:.6f}')
+        for _, module in self.mlp.named_modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
     

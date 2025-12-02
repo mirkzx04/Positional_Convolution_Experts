@@ -31,7 +31,7 @@ class ConvExpert(nn.Module):
             ),
             nn.GroupNorm(num_groups=min(8, self.hidden_channel), num_channels=self.hidden_channel),
             nn.SiLU(inplace=True),
-            nn.Dropout2d(dropout),
+            # nn.Dropout2d(dropout),
 
             nn.Conv2d(
                 in_channels=self.hidden_channel,
@@ -41,7 +41,7 @@ class ConvExpert(nn.Module):
             ),
             nn.GroupNorm(num_groups=min(8, self.hidden_channel), num_channels=self.hidden_channel),
             nn.SiLU(inplace=True),
-            nn.Dropout2d(dropout),
+            # nn.Dropout2d(dropout),
 
             nn.Conv2d(
                 in_channels=self.hidden_channel,

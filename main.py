@@ -5,6 +5,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import torch
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import gc
+gc.collect()
+torch.cuda.empty_cache()
 
 from torch.utils.data import DataLoader
 
@@ -167,25 +171,25 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 1e-4
+    lr = 1e-3
     dropout = 0.1
     weight_decay = 1e-4
     hidden_size = 256
 
     # Hyperparameters of router
     noise_epsilon = 0.2
-    noise_std = 1.0
+    noise_std = 0.2
 
     capacity_factor_train = 1.75
     capacity_factor_val = 2.0
 
-    alpha_init = 1e-4
-    alpha_final = 1e-3
-    alpha_epochs = 100
+    alpha_init = 1e-2
+    alpha_final = 5e-2 
+    alpha_epochs = 150
 
     temp_init = 3.5
     temp_mid = 2.5
-    temp_final = 5.0
+    temp_final = 2.0
     temp_epochs = 100
 
     # Training metrics
@@ -233,7 +237,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-51'
+        name = 'Test-58'
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -271,8 +275,6 @@ if __name__ == "__main__":
         enable_checkpointing= True,
         callbacks=[checkpoint_callback],
         num_sanity_val_steps=0,
-        gradient_clip_algorithm='norm',
-        gradient_clip_val=1.0
     )
 
     print(f'--- Start training --- \n')

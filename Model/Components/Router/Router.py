@@ -19,22 +19,21 @@ class Router(nn.Module):
         router_temp = 1.5,
         capacity_factor_train = 1.25,
         capacity_factor_eval = 1.50,
-        noise_std = 0.20
+        noise_std = 0.20,
         ):
         super().__init__()
         """
-        Router class with staged training support
+        Router class with staged training support.
 
         Args:
-            num_experts (int) -> Number of experts
-            num_layers (int) -> Number of layers
-            noise_epsilon (float) -> Noise epsilon
-            router_temp (float) -> Router temperature
-            capacity_factor_train (float) -> Capacity factor for training
-            capacity_factor_eval (float) -> Capacity factor for evaluation
-            uniform_phase_ratio (float) -> Fraction of training for uniform routing (default: 0.2)
-            blended_phase_ratio (float) -> Fraction of training for blended routing (default: 0.4)
-            blending_schedule (str) -> Blending schedule type ('linear', 'cosine', 'exponential')
+            num_experts (int): Number of experts.
+            num_layers (int): Number of layers.
+            noise_epsilon (float): Epsilon for noise stability.
+            router_temp (float): Temperature for the router logits.
+            capacity_factor_train (float): Capacity factor during training.
+            capacity_factor_eval (float): Capacity factor during evaluation.
+            noise_std (float): Standard deviation for the noise added to logits.
+            Ccap (float): Capacity coefficient (unused in current logic, but kept for compatibility).
         """
         self.num_experts = num_experts
         self.num_layers = num_layers
@@ -46,16 +45,29 @@ class Router(nn.Module):
 
         self.router_temp = router_temp
 
+        self.register_buffer(
+            "usage_ema",
+            torch.full((num_experts,), 1.0 / num_experts, dtype=torch.float32)
+        )
+        self.ema_beta = 0.9
+        self.load_bias_scale = 3.0
+
     def forward(self, X, router_gate, current_epoch = None):
         """
-        Router forward with automatic phase management
+        Router forward pass with automatic phase management based on epochs.
 
         Args:
-            X (torch.Tensor, shape [B*P, C, H, W]) -> Input
-            router_gate (RouterGate) -> Router gate module
-            current_epoch (int, optional) -> Current training epoch
-            total_epochs (int, optional) -> Total training epochs
-            force_specialized (bool) -> Force specialized routing (useful for validation)
+            X (torch.Tensor): Input tensor of shape [N, C, H, W] (or flattened [B*P, ...]).
+            router_gate (nn.Module): The gate module to compute logits.
+            current_epoch (int, optional): Current training epoch to determine routing phase.
+        
+        Returns:
+            dispatch (torch.Tensor): Dispatch tensor for routing.
+            combine (torch.Tensor): Combine tensor for aggregating results.
+            z_loss (torch.Tensor): Z-loss value.
+            aux_loss (torch.Tensor): Auxiliary load balancing loss.
+            logits_std (float): Standard deviation of logits (for monitoring).
+            logits (torch.Tensor): Raw logits (detached, on CPU).
         """
 
         N, C, H, W = X.shape
@@ -68,17 +80,18 @@ class Router(nn.Module):
 
         logits_std = logits_temp.detach().std().item()
         
-        # Route based on current phase
-        if current_epoch <= 30:
+        # Route based on current phase (Uniform < 30 epochs, Specialized >= 30 epochs)
+        if current_epoch < 30:
             return self._uniform_routing(X, logits_temp, logits_std)
-        else:  # specialized
+        else:
             return self._specialized_routing(X, logits_temp, logits_std)
 
     def _specialized_routing(self, X, logits, logits_std):
         """
-        Specialized top-1 routing (Phase 3)
+        Specialized top-1 routing (Phase 2/3).
         
-        Standard MoE routing with expert specialization via top-1 assignment.
+        Standard Mixture-of-Experts (MoE) routing where tokens are assigned to the 
+        expert with the highest probability (Top-1), subject to capacity constraints.
         """
         N, C, H, W = X.shape
         E = self.num_experts
@@ -87,85 +100,88 @@ class Router(nn.Module):
         # diverity_loss = self.diverity_loss(logits)
         # z_loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
 
-        # Add noise to logits in training mode
+        # Add Gumbel noise to logits during training to encourage exploration
         if self.training:
-            noise = logits.new_empty(logits.shape).uniform_(1 - self.noise_epsilon, 1 + self.noise_epsilon)
-            logits = logits * (noise * self.noise_std)
+           u = torch.rand_like(logits).clamp_(1e-6, 1-1e-6)
+           g = -torch.log(-torch.log(u))
+
+           logits = logits + self.noise_std * g
+
+        # # Push sub use experts
+        pi = 1.0 / E
+        adj = self.load_bias_scale * (
+            math.log(pi) - torch.log(self.usage_ema.clamp_min(1e-6))
+        )  # [E]
+        logits = logits + adj
 
         # Apply softmax to get probabilities
         probs = F.softmax(logits.float(), dim = 1) # [N, num_experts]
 
-        # Top-1 : Index of best expert 
-        expert_idx = probs.argmax(dim = 1) # [N]
-        expert_prob = probs.gather(dim = 1, index = expert_idx.unsqueeze(1)).squeeze(1) # [N]
-        expert_mask = F.one_hot(expert_idx, num_classes = E).to(probs.dtype) # [N, E]
+        N, E = probs.shape
 
-        # Compute aux loss
-        aux_loss = self.aux_loss(expert_mask, probs)
+        # Select the expert with the highest probability for each token
+        expert_idx  = probs.argmax(dim=1)                         # [N]
+        expert_prob = probs[torch.arange(N, device=probs.device), expert_idx]  # [N]
+        expert_mask = F.one_hot(expert_idx, num_classes=E).to(probs.dtype)     # [N, E]
 
-        # Expert capacity
-        capcity_factor = self.capacity_factor_train if self.training else self.capacity_factor_eval
-        
-        # Calculate maximum capacity per expert: max number of tokens each expert can process
-        # Uses capacity factor to balance computational load and performance
-        Ccap = max(1, math.ceil(capcity_factor * N / E))
+        # Calculate capacity per expert (must be an integer)
+        cap_factor = self.capacity_factor_train if self.training else self.capacity_factor_eval
+        Ccap = int(max(1, math.ceil(cap_factor * N / E)))
 
-        # === CAPACITY ENFORCEMENT: Limit the number of tokens per expert ===
-        
-        # Sort tokens by assigned expert probability (from highest to lowest)
-        order = torch.argsort(expert_prob, dim = 0, descending = True) # [N]
-        
-        # Reorder expert mask according to probability order
-        mask_sorted = expert_mask[order] # [N, E]
-        
-        # Calculate position of each token in its respective expert's queue
-        # torch.cumsum counts how many preceding tokens are assigned to the same expert
-        pos_sorted = torch.cumsum(mask_sorted, dim = 0) - 1.0 # [N, E]
-        
-        # Determine which tokens are within expert capacity (pos < Ccap)
-        within_capacity = (pos_sorted < Ccap).to(expert_mask.dtype) # [N, E]
-        
-        # Apply capacity constraint: keep only tokens within capacity
-        mask_sorted = mask_sorted * within_capacity # [N, E]
+        # Sort tokens by probability in descending order
+        order = torch.argsort(expert_prob, dim=0, descending=True)            # [N], long
+        mask_sorted = expert_mask.index_select(0, order).to(torch.long)       # [N, E], 0/1 long
+        pos_sorted = torch.cumsum(mask_sorted, dim=0) - 1                     # [N, E], long; -1 for unselected
 
-        # === UNSORT: Restore original token order ===
-        # Create index to restore original order
-        unsort = torch.empty_like(order)
-        unsort[order] = torch.arange(N, device = order.device)
-        
-        # Restore original order of mask with capacity constraints applied
-        mask = mask_sorted[unsort] # [N, E]
+        # Only selected tokens have a valid position (>= 0)
+        within_cap = (pos_sorted >= 0) & (pos_sorted < Ccap)                  # [N, E], bool
+        mask_sorted = (mask_sorted.bool() & within_cap).to(mask_sorted.dtype) # [N, E], 0/1
 
-        # === COMPUTE ROUTING WEIGHTS ===
-        
-        # Calculate gate weights: expert probability * indicator if token is accepted
-        gate = expert_prob * mask.sum(dim = -1) # [N]
-        
-        # Calculate position index for each token in expert's queue
-        pos_idx = pos_sorted.clamp(min = 0, max = Ccap - 1).long()[unsort] # [N, E]
-        
-        # Create one-hot encoding of positions for dispatching
-        one_hot_pos = F.one_hot(pos_idx, num_classes = Ccap).to(expert_mask.dtype) # [N, E, Ccap]
+        # Restore original order (inverse permutation)
+        unsort = torch.empty_like(order)                                       # [N]
+        unsort[order] = torch.arange(N, device=order.device, dtype=order.dtype)
 
-        # === FINAL TENSORS FOR EXPERT COMPUTATION ===
-        
-        # Combine: tensor to aggregate expert outputs (gate_weight * mask * position)
-        combine = (gate[:, None, None] * mask[:, :, None] * one_hot_pos).to(X.dtype)
-        
-        # Dispatch: boolean mask indicating which (token, expert, position) combinations are active
-        dispatch = (combine > 0).to(torch.bool)
+        # Apply capacity mask in the original order
+        mask = mask_sorted.index_select(0, unsort).to(expert_mask.dtype)       # [N, E], 0/1
 
-        return dispatch, combine, z_loss, aux_loss , logits_std, logits.detach().cpu()
+        # Calculate auxiliary loss using load (post-capacity) and importance (pre-capacity)
+        importance = probs                                       # [N, E]
+        load = mask.float()                                # [N, E]
+        aux_loss = self.aux_loss(importance, load)
+
+        # Normalize weights per expert (stop-gradient on denominator)
+        raw   = (mask * expert_prob.unsqueeze(1))                              # [N, E], fp32
+        denom = raw.sum(dim=1, keepdim=True).clamp_min(1e-6).detach()          # [N, 1]
+        w     = raw / denom                                                    # [N, E] ; sum_t w[t,e] ≈ 1
+
+        # Create one-hot positions in sorted space, then restore original order
+        pos_idx_sorted = pos_sorted.clamp(min=0, max=Ccap-1).long()            # [N, E], long
+        pos_idx = pos_idx_sorted.index_select(0, unsort)                       # [N, E], long
+        one_hot_pos = F.one_hot(pos_idx, num_classes=Ccap).to(mask.dtype)      # [N, E, Ccap]
+
+        # Final output tensors
+        combine  = (w[:, :, None] * one_hot_pos).to(X.dtype)                   # [N, E, Ccap]
+        dispatch = (mask[:, :, None].bool() & one_hot_pos.bool())   
+
+        load_per_exp = mask.float().mean(dim = 0)
+        with torch.no_grad():
+            self.usage_ema.mul_(self.ema_beta).add_(
+                (1.0 - self.ema_beta) * load_per_exp
+            )
+
+        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
 
     def _uniform_routing(self, X, logits, logits_std):
         """
-        Uniform routing (Phase 1)
+        Uniform routing (Phase 1).
         
         Distributes tokens evenly across all experts without using router decisions.
         This allows experts to learn diverse features before routing specialization.
         """
         N, C, H, W = X.shape
         E = self.num_experts
+
+        probs = F.softmax(logit.float(), dim = 1) 
         
         # Use router's capacity calculation but ignore logits
         capcity_factor = self.capacity_factor_train if self.training else self.capacity_factor_eval
@@ -179,10 +195,9 @@ class Router(nn.Module):
         positions = torch.zeros(N, E, device=X.device, dtype=torch.long)
         for e in range(E):
             expert_tokens = (expert_assignment == e)
-            expert_count = expert_tokens.sum().item()
+            expert_count = int(expert_tokens.sum().item())
             if expert_count > 0:
-                expert_positions = torch.arange(expert_count, device=X.device)
-                positions[expert_tokens, e] = expert_positions
+                positions[expert_tokens, e] = torch.arange(expert_count, device=X.device)
         
         # Apply capacity constraints
         within_capacity = (positions < Ccap).to(X.dtype)  # [N, E]
@@ -199,45 +214,47 @@ class Router(nn.Module):
         combine = (gate[:, None, None] * mask[:, :, None] * one_hot_pos)  # [N, E, Ccap]
         dispatch = (combine > 0).to(torch.bool)  # [N, E, Ccap]
         
-        # Zero losses during uniform routing
-        z_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
-        aux_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
+        load = mask
+        imp = probs
+        aux_loss = self.aux_loss(load, imp)
+        z_loss = self.z_loss(logits)
         # div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         
         return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
 
     def z_loss(self, logits):
         """
-        Z loss
+        Computes Z-loss to encourage smaller logits.
 
         Args:
-            logits (torch.Tensor) -> Logits
-            batch_size (int) -> Batch size
+            logits (torch.Tensor): Router logits.
         """
 
         return torch.mean(torch.square(torch.logsumexp(logits, dim = -1)))
 
     def aux_loss(self, masked_probs, probs):
         """
-        Aux loss
+        Computes Auxiliary Load Balancing Loss.
+        
+        Encourages balanced load across experts.
 
         Args:
-            masked_probs (torch.Tensor) -> Masked probabilities
-            probs (torch.Tensor) -> Probabilities
+            masked_probs (torch.Tensor): Probabilities after masking (load).
+            probs (torch.Tensor): Original probabilities (importance).
         """
         f = masked_probs.mean(dim = 0)
         p = probs.mean(dim =0)
 
-        lb_loss = torch.sum(f * p) * self.num_experts
+        lb_loss = (f * p).sum() * self.num_experts
 
         return lb_loss
     
     def diverity_loss(self, logits):
         """
-        Encourgate different experts to have different activation patterns
+        Encourage different experts to have different activation patterns.
 
-        Args : 
-            logits : Router logits [N, num_experts]
+        Args: 
+            logits (torch.Tensor): Router logits [N, num_experts].
         """
 
         # Compute expert correlation
@@ -247,9 +264,5 @@ class Router(nn.Module):
 
         # Penalize high correlation between experts
         identity = torch.eye(E, device = logits.device)
-        off_diagonal = correlation * (1 - identity)
-        diverity_loss = torch.sum(off_diagonal ** 2) / (E * (E - 1))
-
-        return diverity_loss 
         
         

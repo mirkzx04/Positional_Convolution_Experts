@@ -51,7 +51,7 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        self.pooler = nn.AdaptiveAvgPool2d(8)
+        self.pooler = nn.AdaptiveAvgPool2d(1)
         self.flatten = nn.Flatten()
 
         last_channel = self.create_layers(
@@ -71,8 +71,14 @@ class PCENetwork(nn.Module):
             noise_std=noise_std
         )
 
-        self.linear_layer = LazyLinear(self.num_classes)
-
+        self.prediction_head = nn.Sequential(
+            nn.LayerNorm(last_channel),
+            nn.Linear(last_channel, 4 * last_channel, bias=True),
+            nn.SiLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(4 * last_channel, self.num_classes, bias=True)
+        )
+        
         self.moe_aggregator = MoEAggregator(
             num_experts=[num_experts] * layer_number,
             num_layers=layer_number,
@@ -212,20 +218,20 @@ class PCENetwork(nn.Module):
                 )
 
             E, Ccap = dispatch.shape[1], dispatch.shape[2]
-
-            # Patch expert_inputs : [E, Ccap, C, H, W]
             expert_inputs = X_patches_reshape.new_zeros((E, Ccap, C, H, W))
+
             n_idx, e_idx, c_idx = self._indices_from_dispatch(dispatch)
             if n_idx.numel() > 0:
                 expert_inputs[e_idx, c_idx] = X_patches_reshape[n_idx]
             
             # Each expert is applied to its input
+            expert_outputs_list = []
             for e , expert in enumerate(experts):
                 # Expert inputs[e] : [Ccap, C, H, W] -> [Ccap, C, H, W]
                 y_e = expert(expert_inputs[e])
                 expert_outputs_list.append(y_e)
             expert_outputs = torch.stack(expert_outputs_list, dim = 0) # [E, Ccap, C, H, W]
-            C_out, H_out, W_out = expert_outputs.shape[2], expert_outputs.shape[3], expert_outputs.shape[4]
+            C_out, H_out, W_out = expert_outputs.shape[2:]
 
             # Combine outputs : [E, C, H, W]
             outputs = X_patches_reshape.new_zeros((N, C_out, H_out, W_out))
@@ -244,20 +250,17 @@ class PCENetwork(nn.Module):
                 w = w_patches
             )
             output = bottleneck(output)
+            
             X = output
 
             tot_z_loss += z_loss
             tot_imb_loss += imb_loss
             # tot_div_loss += div_loss
 
-        # Applying SSP at final experts output
-        experts_output = X
-        experts_output_pooled = self.pooler(experts_output)
-        experts_output_flatten = self.flatten(experts_output_pooled)
-        # print(experts_output_flatten.shape)
-        # norm_out = self.normal(experts_output)
-        logits = self.linear_layer(experts_output_flatten)
-
+        x = X 
+        x = self.pooler(x) # Shape [B, last_C, 1, 1]
+        x = self.flatten(x) # Shape [B, last_C]
+        logits = self.prediction_head(x) # Shape [B, num_classes]
         return logits, tot_z_loss, tot_imb_loss
 
     def _indices_from_dispatch(self, dispatch):
