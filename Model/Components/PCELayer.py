@@ -37,27 +37,29 @@ class PCELayer(nn.Module):
                 out_channels=hidden_channel,
                 kernel_size=1,
                 padding= 1 // 2,
+                bias=False
             ),
             nn.GroupNorm(num_groups=min(8, hidden_channel), num_channels=hidden_channel),
             nn.SiLU(inplace=True),
-            # nn.Dropout2d(dropout),
-
+            nn.Dropout2d(dropout),
             nn.Conv2d(
                 in_channels=hidden_channel,
                 out_channels=hidden_channel,
                 kernel_size=3,
                 padding= 3 // 2,
+                groups=hidden_channel,
+                bias=False,
             ),
             nn.GroupNorm(num_groups=min(8, hidden_channel), num_channels=hidden_channel),
             nn.SiLU(inplace=True),
-            # nn.Dropout2d(dropout),
-
+            nn.Dropout2d(dropout),
             nn.Conv2d(
                 in_channels=hidden_channel,
                 out_channels= out_channel,
                 kernel_size=1,
                 stride = 2 if downsampling else 1, 
-                padding= 1 // 2
+                padding= 1 // 2,
+                bias=False,
             ),
             nn.GroupNorm(num_groups=min(8, out_channel), num_channels=out_channel),
             nn.SiLU(inplace=True),

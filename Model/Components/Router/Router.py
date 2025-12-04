@@ -147,7 +147,7 @@ class Router(nn.Module):
         # Calculate auxiliary loss using load (post-capacity) and importance (pre-capacity)
         importance = probs                                       # [N, E]
         load = mask.float()                                # [N, E]
-        aux_loss = self.aux_loss(importance, load)
+        aux_loss = self.aux_loss(load, importance)
 
         # Normalize weights per expert (stop-gradient on denominator)
         raw   = (mask * expert_prob.unsqueeze(1))                              # [N, E], fp32
@@ -181,7 +181,7 @@ class Router(nn.Module):
         N, C, H, W = X.shape
         E = self.num_experts
 
-        probs = F.softmax(logit.float(), dim = 1) 
+        probs = F.softmax(logits.float(), dim = 1) 
         
         # Use router's capacity calculation but ignore logits
         capcity_factor = self.capacity_factor_train if self.training else self.capacity_factor_eval

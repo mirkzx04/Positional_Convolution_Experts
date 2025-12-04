@@ -171,26 +171,26 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 1e-3
-    dropout = 0.1
+    lr = 2e-4
+    dropout = 0.10
     weight_decay = 1e-4
     hidden_size = 256
 
     # Hyperparameters of router
     noise_epsilon = 0.2
-    noise_std = 0.2
+    noise_std = 0.1
 
-    capacity_factor_train = 1.75
-    capacity_factor_val = 2.0
+    capacity_factor_train = 2.0
+    capacity_factor_val = 2.25
 
-    alpha_init = 1e-2
-    alpha_final = 5e-2 
-    alpha_epochs = 150
+    alpha_init = 2e-2
+    alpha_final = 1e-1 
+    alpha_epochs = 120
 
-    temp_init = 3.5
-    temp_mid = 2.5
-    temp_final = 2.0
-    temp_epochs = 100
+    temp_init = 2.5
+    temp_mid = 2.0
+    temp_final = 1.2
+    temp_epochs = 120
 
     # Training metrics
     train_epochs = 200
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-58'
+        name = 'Test-31'
     )
 
     checkpoint_callback = ModelCheckpoint(

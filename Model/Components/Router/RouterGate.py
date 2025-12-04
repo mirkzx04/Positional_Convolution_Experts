@@ -9,11 +9,9 @@ class RouterGate(nn.Module):
         
         # self.projection = nn.Linear(in_channel, out_channel)
         in_size = 2 * in_channel
-        self.norm = nn.LayerNorm(in_size)
         self.mlp = nn.Sequential(
-            nn.Linear(in_size, hidden_size, bias=True),
-            nn.GELU(),
-            nn.Linear(hidden_size, num_experts, bias=True)
+            nn.LayerNorm(in_size),
+            nn.Linear(in_size, num_experts, bias=True),
         )
         # self.head_w = nn.Parameter(
         #     torch.empty(out_channel, num_experts)
@@ -36,8 +34,7 @@ class RouterGate(nn.Module):
         X_cat = torch.cat([avarage_pooling, max_pooling], dim = 1) # [B*P, 3 * C]
         
         # Norm and MLP
-        X_norm = self.norm(X_cat).to(dtype=torch.float32)
-        logits = self.mlp(X_norm).to(dtype=torch.float32)
+        logits = self.mlp(X_cat).to(dtype=torch.float32)
         logits = logits - logits.mean(dim = -1, keepdim = True)
         
         # logits_norm = F.normalize(logits, dim = -1)

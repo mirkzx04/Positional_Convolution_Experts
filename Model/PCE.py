@@ -72,11 +72,13 @@ class PCENetwork(nn.Module):
         )
 
         self.prediction_head = nn.Sequential(
-            nn.LayerNorm(last_channel),
-            nn.Linear(last_channel, 4 * last_channel, bias=True),
-            nn.SiLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(4 * last_channel, self.num_classes, bias=True)
+            # nn.LayerNorm(last_channel),
+            nn.Linear(last_channel, num_classes, bias=True),
+            # nn.ReLU(inplace=True),
+            # # nn.Dropout(dropout),
+            # nn.Linear(4 * last_channel, 8 * last_channel, bias=True),
+            # nn.ReLU(inplace=True),
+            # nn.Linear(8 * last_channel, num_classes, bias=True),
         )
         
         self.moe_aggregator = MoEAggregator(
