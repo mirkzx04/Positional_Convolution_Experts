@@ -72,13 +72,11 @@ class PCENetwork(nn.Module):
         )
 
         self.prediction_head = nn.Sequential(
-            # nn.LayerNorm(last_channel),
-            nn.Linear(last_channel, num_classes, bias=True),
-            # nn.ReLU(inplace=True),
-            # # nn.Dropout(dropout),
-            # nn.Linear(4 * last_channel, 8 * last_channel, bias=True),
-            # nn.ReLU(inplace=True),
-            # nn.Linear(8 * last_channel, num_classes, bias=True),
+            nn.LayerNorm(last_channel),
+            nn.Linear(last_channel, 4 * last_channel),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(4 * last_channel, num_classes),
         )
         
         self.moe_aggregator = MoEAggregator(
@@ -192,7 +190,6 @@ class PCENetwork(nn.Module):
             experts = layer.experts
             patch_size = layer.patch_size
             router_gate = layer.router_gate
-            bottleneck = layer.inverted_bottleneck
             expert_outputs_list = []
 
             # Divides feature map / input img in patches
@@ -250,9 +247,7 @@ class PCENetwork(nn.Module):
                 'b (h w) c ph pw -> b c (h ph) (w pw)',
                 h = h_patches,
                 w = w_patches
-            )
-            output = bottleneck(output)
-            
+            )            
             X = output
 
             tot_z_loss += z_loss

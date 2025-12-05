@@ -3,7 +3,7 @@ from torch import nn as  nn
 import torch.functional as F
 # import timmù
 class ConvExpert(nn.Module):
-    def __init__(self, in_channel, out_channel, dropout, use_residual=True, kernel_size = 3):
+    def __init__(self, in_channel, out_channel, dropout, use_residual=True, downsampling = False):
         super().__init__()
         """
         Constructor of one convolution expert
@@ -21,44 +21,46 @@ class ConvExpert(nn.Module):
         self.hidden_channel = out_channel * 4
         self.final_act = nn.SiLU(inplace=True)
 
+        stride = 2 if downsampling else 1
+
         # Define experts operation
         self.conv_block = nn.Sequential(
             nn.Conv2d(
                 in_channels=in_channel,
                 out_channels=self.hidden_channel,
-                kernel_size=1,
-                padding=1 // 2
-            ),
-            nn.GroupNorm(num_groups=min(8, self.hidden_channel), num_channels=self.hidden_channel),
-            nn.SiLU(inplace=True),
-            nn.Dropout2d(dropout),
-            nn.Conv2d(
-                in_channels=self.hidden_channel,
-                out_channels=self.hidden_channel,
                 kernel_size=3,
-                padding=3 // 2
+                padding=1,
+                stride= stride,
+                bias=False
             ),
             nn.GroupNorm(num_groups=min(8, self.hidden_channel), num_channels=self.hidden_channel),
             nn.SiLU(inplace=True),
             nn.Dropout2d(dropout),
             nn.Conv2d(
                 in_channels=self.hidden_channel,
-                out_channels= out_channel,
-                kernel_size=1,
-                padding=1 // 2
+                out_channels=out_channel,
+                kernel_size=3,
+                padding=1,
+                bias=False
             ),
             nn.GroupNorm(num_groups=min(8, out_channel), num_channels=out_channel),
         )
 
         if self.use_residual:
-            if in_channel == out_channel:
+            if stride != 1 or in_channel != out_channel:
+                self.skip = nn.Sequential(
+                    nn.Conv2d(
+                        in_channels=in_channel,
+                        out_channels=out_channel,
+                        kernel_size=3,
+                        padding=1,
+                        stride= stride,
+                        bias=False
+                    ),
+                    nn.GroupNorm(num_groups=min(8, out_channel), num_channels=out_channel),
+                ) 
+            else : 
                 self.skip = nn.Identity()
-            else:
-                self.skip = nn.Conv2d(in_channel, out_channel, kernel_size=1, padding= 1 // 2, bias = False)
-            # self.drop_path = DropPath(dropout) if dropout > 0 else nn.Identity() 
-        else :
-            self.drop_path = nn.Identity()      
-    
     def forward(self, X):
         out = self.conv_block(X)
 

@@ -69,12 +69,12 @@ class EMADiffLitModule(pl.LightningModule):
         self.temp_final = temp_final
         self.temp_epochs = temp_epochs
 
-        self.router_mul = 3.0
+        self.router_mul = 50.0
 
-        self.warmup_backbone = 15
+        self.warmup_backbone = 10
 
         self.router_start_epoch = 30
-        self.router_warmup = 15
+        self.router_warmup = 5
 
         # Training and log utilites
         self.augmentation = DataAgumentation()
@@ -230,7 +230,7 @@ class EMADiffLitModule(pl.LightningModule):
     #----- SCHEDULERS -----
     def temp_scheduler_step(self):
         t0 = self.router_start_epoch
-        tw = self.router_warmup_epoch
+        tw = self.router_warmup
 
         tdec = max(self.temp_epochs, t0  + tw + 1)
 
@@ -255,7 +255,7 @@ class EMADiffLitModule(pl.LightningModule):
         alpha_final = self.alpha_final
 
         t0 = self.router_start_epoch          
-        tw = self.router_warmup_epoch         
+        tw = self.router_warmup         
         te = self.alpha_epochs
 
         if epoch < t0:
@@ -399,11 +399,11 @@ class EMADiffLitModule(pl.LightningModule):
 
         base_lr = self.lr
         wd = self.weight_decay
-        
+
         tot_epochs = self.train_epochs
         warmup_backbone = self.warmup_backbone
         router_start_epoch = self.router_start_epoch
-        warmup_router = self.router_warmup_epoch
+        router_warmup = self.router_warmup
 
         eta_min = 1e-6
 
@@ -421,11 +421,11 @@ class EMADiffLitModule(pl.LightningModule):
         def router_lr_lambda(epoch):
             if epoch < router_start_epoch:
                 return 0.0
-            if epoch < warmup_router:
-                pct = epoch / warmup_router
+            if epoch < router_start_epoch + router_warmup:
+                pct = epoch / router_warmup
                 return eta_min + (1 - eta_min) * pct
             else : 
-                progress = (epoch - warmup_router) / (tot_epochs - warmup_router) 
+                progress = (epoch - router_warmup) / (tot_epochs - router_warmup) 
                 progress = min(progress, 1.0)
 
                 cosine_dec = 0.5 * (1 + math.cos(math.pi * progress))
