@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 
 class PatchExtractor(nn.Module):
-    def __init__(self, patch_size, num_frequencies = 3):
+    def __init__(self, patch_size, num_frequencies = 4):
         super().__init__()
         self.patch_size = patch_size
         self.num_frequencies = num_frequencies
