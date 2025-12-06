@@ -181,32 +181,32 @@ class PCENetwork(nn.Module):
         Returns:
             logits (torch.tensor) : tensor beatches (B, num_classes)
         """
-
         tot_z_loss = 0.0
         tot_imb_loss = 0.0
 
-        for layer_idx, layer in enumerate(self.layers):
-            # Layer components
-            experts = layer.experts
-            patch_size = layer.patch_size
-            router_gate = layer.router_gate
-            expert_outputs_list = []
+        # Cache batch size to avoid repeated tensor accesses
+        batch_size = X.shape[0]
 
-            # Divides feature map / input img in patches
+        for layer_idx, layer in enumerate(self.layers):
+            # Store layer attributes for cleaner access
+            patch_size = layer.patch_size
+            experts = layer.experts
+            
+            # Extract patches from the current feature map
             h_patches, w_patches, X_positional, X_patches_reshape, X_patches = self.get_patches(X, patch_size)
-            B, P, C, H, W = X_patches.shape
+            
+            # Unpack dimensions for easier reference
+            B, P, C, H, W = X_patches.shape 
             N = B * P
 
+            # Route patches to experts and compute auxiliary losses
             dispatch, combine, z_loss, imb_loss, logits_std, logits = self.router(
                 X_positional, 
-                router_gate, 
+                layer.router_gate, 
                 current_epoch,
-            ) # [N, E, Ccap], scalar, scalar
-            # if self.training:
-            #     print(f'PCE Layer : {layer_idx}')
-            #     print(f'Dispatch stats : shape ={dispatch.shape}, sum = {dispatch.sum().item()}')
-            #     print(f'Combine stats : shape ={combine.shape}, sum = {combine.sum().item()}')
+            )
 
+            # Update aggregator statistics without gradients
             with torch.no_grad():
                 self.moe_aggregator.update_layer(
                     layer_idx, 
@@ -217,48 +217,60 @@ class PCENetwork(nn.Module):
                 )
 
             E, Ccap = dispatch.shape[1], dispatch.shape[2]
+            
+            # Allocate buffer for expert inputs with proper device and dtype
             expert_inputs = X_patches_reshape.new_zeros((E, Ccap, C, H, W))
 
+            # Extract routing indices for scatter operation
             n_idx, e_idx, c_idx = self._indices_from_dispatch(dispatch)
+            
+            # Distribute patches to their assigned expert slots
             if n_idx.numel() > 0:
                 expert_inputs[e_idx, c_idx] = X_patches_reshape[n_idx]
             
-            # Each expert is applied to its input
+            # Process each expert independently on its assigned patches
             expert_outputs_list = []
-            for e , expert in enumerate(experts):
-                # Expert inputs[e] : [Ccap, C, H, W] -> [Ccap, C, H, W]
-                y_e = expert(expert_inputs[e])
-                expert_outputs_list.append(y_e)
-            expert_outputs = torch.stack(expert_outputs_list, dim = 0) # [E, Ccap, C, H, W]
-            C_out, H_out, W_out = expert_outputs.shape[2:]
+            
+            for i, expert in enumerate(experts):
+                expert_outputs_list.append(expert(expert_inputs[i]))
 
-            # Combine outputs : [E, C, H, W]
+            expert_outputs = torch.stack(expert_outputs_list, dim=0) 
+            
+            # Get output dimensions from processed patches
+            _, _, C_out, H_out, W_out = expert_outputs.shape
+
+            # Preallocate output buffer for gathering results
             outputs = X_patches_reshape.new_zeros((N, C_out, H_out, W_out))
+            
             if n_idx.numel() > 0:
-                gates = combine[n_idx, e_idx, c_idx].to(expert_outputs.dtype)
-                contrib = expert_outputs[e_idx, c_idx] * gates.view(-1, 1, 1, 1)
+                # Apply routing weights to expert outputs
+                gates = combine[n_idx, e_idx, c_idx].to(dtype=expert_outputs.dtype).view(-1, 1, 1, 1)
+                
+                # Compute weighted contributions from each expert
+                contrib = expert_outputs[e_idx, c_idx] * gates
+                
+                # Accumulate contributions back to their original patch positions
                 outputs.index_add_(0, n_idx, contrib.to(outputs.dtype))
 
-            # Reassamble patch in in a single image [B, P, C, H ,W] -> [B, C, H, W]
-            # and applied final convolution 1x1 
-            outputs = outputs.reshape(B, P, C_out, H_out, W_out)
+            # Reassemble patches back into spatial feature map
             output = rearrange(
-                outputs, 
+                outputs.view(B, P, C_out, H_out, W_out), 
                 'b (h w) c ph pw -> b c (h ph) (w pw)',
-                h = h_patches,
-                w = w_patches
+                h=h_patches,
+                w=w_patches
             )            
             X = output
 
             tot_z_loss += z_loss
             tot_imb_loss += imb_loss
-            # tot_div_loss += div_loss
 
-        x = X 
-        x = self.pooler(x) # Shape [B, last_C, 1, 1]
-        x = self.flatten(x) # Shape [B, last_C]
-        logits = self.prediction_head(x) # Shape [B, num_classes]
+        # Apply global pooling and prediction head
+        x = self.pooler(X) 
+        x = self.flatten(x) 
+        logits = self.prediction_head(x) 
+        
         return logits, tot_z_loss, tot_imb_loss
+
 
     def _indices_from_dispatch(self, dispatch):
         """
