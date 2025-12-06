@@ -69,12 +69,12 @@ class EMADiffLitModule(pl.LightningModule):
         self.temp_final = temp_final
         self.temp_epochs = temp_epochs
 
-        self.router_mul = 50.0
+        self.router_mul = 5.0
 
-        self.warmup_backbone = 10
+        self.warmup_backbone = 15
 
         self.router_start_epoch = 30
-        self.router_warmup = 5
+        self.router_warmup = 10
 
         # Training and log utilites
         self.augmentation = DataAgumentation()
@@ -166,7 +166,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.train_loss(logits, labels)
-        z_loss_weigth = 1e-5 if self.current_epoch >= self.router_start_epoch else 1e-10
+        z_loss_weigth = 1e-4 if self.current_epoch >= self.router_start_epoch else 1e-10
 
         aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth)
         total_loss = class_loss + aux_loss
@@ -223,7 +223,7 @@ class EMADiffLitModule(pl.LightningModule):
             self._freeze_router()
 
         elif e >= self.router_start_epoch:
-
+            self._unfreeze_router()
             self.aux_loss_weight = self.alpha_scheduler()
             self.model.router.router_temp = self.temp_scheduler_step()
 
@@ -339,7 +339,7 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         class_loss = self.val_loss(logits, labels)
-        z_loss_weigth = 1e-5 if self.current_epoch >= self.router_start_epoch else 1e-10
+        z_loss_weigth = 1e-4 if self.current_epoch >= self.router_start_epoch else 1e-10
 
         aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth)
         total_loss = class_loss + aux_loss   
@@ -420,16 +420,20 @@ class EMADiffLitModule(pl.LightningModule):
 
         def router_lr_lambda(epoch):
             if epoch < router_start_epoch:
-                return 0.0
-            if epoch < router_start_epoch + router_warmup:
-                pct = epoch / router_warmup
-                return eta_min + (1 - eta_min) * pct
-            else : 
-                progress = (epoch - router_warmup) / (tot_epochs - router_warmup) 
-                progress = min(progress, 1.0)
+               return 0.0
 
-                cosine_dec = 0.5 * (1 + math.cos(math.pi * progress))
-                return eta_min + (1 - eta_min) * cosine_dec
+            # Linear Warmup
+            if epoch < router_start_epoch + router_warmup:
+                pct = (epoch - router_start_epoch + 1) / float(max(1, router_warmup))
+                return eta_min + (1 - eta_min) * pct
+            
+            # Cosine decay
+            start = router_start_epoch + router_warmup
+            progress = (epoch - start) / float(max(1, tot_epochs - start))
+            progress = min(progress, 1.0)
+            cosine_dec = 0.5 * (1 + math.cos(math.pi * progress))
+            return eta_min + (1 - eta_min) * cosine_dec
+        
         # Optimizer
         self.optimizer = AdamW(
             [
