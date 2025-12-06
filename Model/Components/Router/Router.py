@@ -101,18 +101,18 @@ class Router(nn.Module):
         # z_loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
 
         # Add Gumbel noise to logits during training to encourage exploration
-        if self.training:
-           u = torch.rand_like(logits).clamp_(1e-6, 1-1e-6)
-           g = -torch.log(-torch.log(u))
+        # if self.training:
+        #    u = torch.rand_like(logits).clamp_(1e-6, 1-1e-6)
+        #    g = -torch.log(-torch.log(u))
 
-           logits = logits + self.noise_std * g
+        #    logits = logits + self.noise_std * g
 
-        # # Push sub use experts
-        pi = 1.0 / E
-        adj = self.load_bias_scale * (
-            math.log(pi) - torch.log(self.usage_ema.clamp_min(1e-6))
-        )  # [E]
-        logits = logits + adj
+        # # # Push sub use experts
+        # pi = 1.0 / E
+        # adj = self.load_bias_scale * (
+        #     math.log(pi) - torch.log(self.usage_ema.clamp_min(1e-6))
+        # )  # [E]
+        # logits = logits + adj
 
         # Apply softmax to get probabilities
         probs = F.softmax(logits.float(), dim = 1) # [N, num_experts]
@@ -214,10 +214,8 @@ class Router(nn.Module):
         combine = (gate[:, None, None] * mask[:, :, None] * one_hot_pos)  # [N, E, Ccap]
         dispatch = (combine > 0).to(torch.bool)  # [N, E, Ccap]
         
-        load = mask
-        imp = probs
-        aux_loss = self.aux_loss(load, imp)
-        z_loss = self.z_loss(logits)
+        aux_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
+        z_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         # div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         
         return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
