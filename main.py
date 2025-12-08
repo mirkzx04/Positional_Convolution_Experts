@@ -171,7 +171,7 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 1e-5
+    lr = 5e-5
     dropout = 0.10
     weight_decay = 1e-4
     hidden_size = 256
@@ -184,11 +184,11 @@ if __name__ == "__main__":
     capacity_factor_val = 4.0
 
     alpha_init = 0.0
-    alpha_final = 2e-2
+    alpha_final = 1e-2
     alpha_epochs = 80
 
     temp_init = 2.0
-    temp_mid = 2.3
+    temp_mid = 1.5
     temp_final = 1.2
     temp_epochs = 80
 
