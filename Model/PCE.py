@@ -75,7 +75,7 @@ class PCENetwork(nn.Module):
             nn.LayerNorm(last_channel),
             nn.Linear(last_channel, 4 * last_channel),
             nn.GELU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.1),
             nn.Linear(4 * last_channel, num_classes),
         )
         
