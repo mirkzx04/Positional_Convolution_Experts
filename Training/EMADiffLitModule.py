@@ -69,7 +69,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.temp_final = temp_final
         self.temp_epochs = temp_epochs
 
-        self.router_mul = 5.0
+        self.router_mul = 2.0
 
         self.warmup_backbone = 15
 

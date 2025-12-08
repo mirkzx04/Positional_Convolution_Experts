@@ -171,7 +171,7 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 1e-3
+    lr = 1e-5
     dropout = 0.10
     weight_decay = 1e-4
     hidden_size = 256
@@ -180,8 +180,8 @@ if __name__ == "__main__":
     noise_epsilon = 0.2
     noise_std = 0.1
 
-    capacity_factor_train = 2.0
-    capacity_factor_val = 3.0
+    capacity_factor_train = 4.0
+    capacity_factor_val = 4.0
 
     alpha_init = 0.0
     alpha_final = 2e-2
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-35'
+        name = 'Test-36'
     )
 
     checkpoint_callback = ModelCheckpoint(
