@@ -27,10 +27,12 @@ class CIFAR10TrainDataset(Dataset):
 
         self.transforms = trs.Compose([
             trs.RandomCrop(32, padding=4),
+            trs.CenterCrop(32),
             trs.RandomHorizontalFlip(p=0.5),
             trs.RandomRotation(degrees=15),
             trs.ColorJitter(brightness=0.2, contrast=0.2),
-            trs.ToTensor()
+            trs.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
         ])
         
     def __len__(self):
@@ -52,6 +54,13 @@ class CIFAR10TrainDataset(Dataset):
         img = Image.fromarray(imgaes)
         if self.transforms:
             img = self.transforms(img)
+
+        val_transforms = trs.Compose([
+            trs.Resize((32, 32)),
+            trs.CenterCrop(32),
+            trs.ToTensor(),
+            trs.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
+        ])
 
         return imgaes, labels
 
@@ -121,13 +130,6 @@ class CIFAR10Dataset(Dataset):
             self.labels_train.extend(batch_data[b'labels'])
 
         self.data_train = np.array(self.data_train, dtype=np.float32)
-    
-        # Converti mean e std in array numpy con shape [3, 1, 1]
-        mean = np.array(self.mean, dtype=np.float32).reshape(3, 1, 1)
-        std = np.array(self.std, dtype=np.float32).reshape(3, 1, 1)
-    
-        # Broadcasting automatico: [N, 3, 32, 32] - [3, 1, 1] / [3, 1, 1]
-        self.data_train = (self.data_train - mean) / std
         self.labels_train = np.array(self.labels_train, dtype=np.int64)
 
     def load_batch_val(self):
@@ -145,14 +147,6 @@ class CIFAR10Dataset(Dataset):
         self.labels_validation.extend(batch_data[b'labels'])
 
         self.data_validation = np.array(self.data_validation, dtype=np.float32)
-    
-        # Converti mean e std in array numpy con shape [3, 1, 1]
-        mean = np.array(self.mean, dtype=np.float32).reshape(3, 1, 1)
-        std = np.array(self.std, dtype=np.float32).reshape(3, 1, 1)
-    
-        # Broadcasting automatico: [N, 3, 32, 32] - [3, 1, 1] / [3, 1, 1]
-        self.data_validation = (self.data_validation - mean) / std
-
         self.labels_validation = np.array(self.labels_validation, dtype=np.int64)
 
     # Unpickle function for cifar10 data
