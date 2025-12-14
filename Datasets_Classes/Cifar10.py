@@ -121,36 +121,32 @@ class CIFAR10Dataset(Dataset):
         self.load_batch_val()
 
     def load_batch_data(self):
-        for idx in range(1,6):
-            batch_path = f'{self.path}{str(idx)}'
-            batch_data = self.read_batch_path(path = batch_path)
+        for idx in range(1, 6):
+            batch_path = f'{self.path}data_batch_{str(idx)}'
+            batch_data = self.read_batch_path(path=batch_path)
             
-            # Reshape IMG from [10000, 3072] to [10000, 3, 32,32]
-            imgs_data = batch_data[b'data']
-            imgs_data = imgs_data.reshape(10000, 3, 32,32)
+            imgs = batch_data[b'data'].reshape(-1, 3, 32, 32)
+            imgs = imgs.transpose(0, 2, 3, 1)
 
-            self.data_train.extend(imgs_data)
-            self.labels_train.extend(batch_data[b'labels'])
+            self.data_train_list.append(imgs)
+            self.labels_train_list += batch_data[b'labels']
 
-        self.data_train = np.array(self.data_train, dtype=np.float32)
-        self.labels_train = np.array(self.labels_train, dtype=np.int64)
+        self.data_train = np.vstack(self.data_train_list).astype(np.uint8)
+        self.labels_train = np.array(self.labels_train_list, dtype=np.int64)
 
     def load_batch_val(self):
         """
         Load validation batch data
         """
-        batch_path = f'./Data/cifar-10-batches-py/test_batch'
-        batch_data = self.read_batch_path(path = batch_path)
+        batch_path = f'{self.path}test_batch'
+        batch_data = self.read_batch_path(path=batch_path)
 
-        # Reshape IMG from [10000, 3072] to [10000, 3, 32,32]
-        imgs_data = batch_data[b'data']
-        imgs_data = imgs_data.reshape(10000, 3, 32,32)
-        
-        self.data_validation.extend(imgs_data)
-        self.labels_validation.extend(batch_data[b'labels'])
+        # Stessa procedura per la validazione
+        imgs = batch_data[b'data'].reshape(-1, 3, 32, 32)
+        imgs = imgs.transpose(0, 2, 3, 1) # [N, 32, 32, 3]
 
-        self.data_validation = np.array(self.data_validation, dtype=np.float32)
-        self.labels_validation = np.array(self.labels_validation, dtype=np.int64)
+        self.data_validation = imgs.astype(np.uint8)
+        self.labels_validation = np.array(batch_data[b'labels'], dtype=np.int64)
 
     # Unpickle function for cifar10 data
     def read_batch_path(self, path):
