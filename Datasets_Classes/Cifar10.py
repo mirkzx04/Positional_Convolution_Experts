@@ -32,7 +32,7 @@ class CIFAR10TrainDataset(Dataset):
             trs.RandomRotation(degrees=15),
             trs.ColorJitter(brightness=0.2, contrast=0.2),
             trs.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
+            trs.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
         ])
         
     def __len__(self):
@@ -77,6 +77,16 @@ class CIFAR10ValidationDataset(Dataset):
 
         self.data = cifar10_dataset.data_validation
         self.lables = cifar10_dataset.labels_validation
+
+        self.transforms = trs.Compose([
+            trs.RandomCrop(32, padding=4),
+            trs.CenterCrop(32),
+            trs.RandomHorizontalFlip(p=0.5),
+            trs.RandomRotation(degrees=15),
+            trs.ColorJitter(brightness=0.2, contrast=0.2),
+            trs.ToTensor(),
+            trs.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
+        ])
 
     def __len__(self):
         return len(self.data)
