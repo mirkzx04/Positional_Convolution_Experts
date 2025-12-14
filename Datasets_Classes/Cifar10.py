@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 class CIFAR10TrainDataset(Dataset):
-    def __init__(self, cifar10_dataset, transforms):
+    def __init__(self, cifar10_dataset):
         """
         Constructor of CIFAR10TrainDataset
 
