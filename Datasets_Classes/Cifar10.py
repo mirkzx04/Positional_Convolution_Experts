@@ -1,4 +1,6 @@
 from torch.utils.data import Dataset
+from torchvision import transforms as trs
+from PIL import Image
 
 import pickle
 import matplotlib.pyplot as plt
@@ -6,7 +8,7 @@ import cv2
 import numpy as np
 
 class CIFAR10TrainDataset(Dataset):
-    def __init__(self, cifar10_dataset):
+    def __init__(self, cifar10_dataset, transforms):
         """
         Constructor of CIFAR10TrainDataset
 
@@ -23,6 +25,13 @@ class CIFAR10TrainDataset(Dataset):
         self.data = cifar10_dataset.data_train
         self.lables = cifar10_dataset.labels_train
 
+        self.transforms = trs.Compose([
+            trs.RandomCrop(32, padding=4),
+            trs.RandomHorizontalFlip(p=0.5),
+            trs.RandomRotation(degrees=15),
+            trs.ColorJitter(brightness=0.2, contrast=0.2),
+            trs.ToTensor()
+        ])
         
     def __len__(self):
         return len(self.data)
@@ -39,6 +48,10 @@ class CIFAR10TrainDataset(Dataset):
         """
         imgaes = self.data[idx]
         labels = self.lables[idx]
+
+        img = Image.fromarray(imgaes)
+        if self.transforms:
+            img = self.transforms(img)
 
         return imgaes, labels
 
@@ -90,9 +103,6 @@ class CIFAR10Dataset(Dataset):
 
         self.data_validation = []
         self.labels_validation = []
-
-        self.mean = (0.4914, 0.4822, 0.4465)  # RGB channels
-        self.std = (0.2470, 0.2435, 0.2616)   # RGB channels
         
         # Load batch data from path
         self.load_batch_data()
