@@ -6,6 +6,7 @@ import pickle
 import matplotlib.pyplot as plt
 import cv2
 import numpy as np
+import os
 
 class CIFAR10TrainDataset(Dataset):
     def __init__(self, cifar10_dataset):
@@ -122,7 +123,9 @@ class CIFAR10Dataset(Dataset):
 
     def load_batch_data(self):
         for idx in range(1, 6):
-            batch_path = f'{self.path}data_batch_{str(idx)}'
+            file_name = f'data_batch_{idx}'
+            batch_path = os.path.join(self.path, file_name)
+
             batch_data = self.read_batch_path(path=batch_path)
             
             imgs = batch_data[b'data'].reshape(-1, 3, 32, 32)
@@ -138,12 +141,13 @@ class CIFAR10Dataset(Dataset):
         """
         Load validation batch data
         """
-        batch_path = f'{self.path}test_batch'
+        file_name = 'test_batch'
+        batch_path = os.path.join(self.path, file_name)
+        
         batch_data = self.read_batch_path(path=batch_path)
 
-        # Stessa procedura per la validazione
         imgs = batch_data[b'data'].reshape(-1, 3, 32, 32)
-        imgs = imgs.transpose(0, 2, 3, 1) # [N, 32, 32, 3]
+        imgs = imgs.transpose(0, 2, 3, 1) 
 
         self.data_validation = imgs.astype(np.uint8)
         self.labels_validation = np.array(batch_data[b'labels'], dtype=np.int64)
