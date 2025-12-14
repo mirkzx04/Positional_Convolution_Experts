@@ -81,6 +81,8 @@ class Router(nn.Module):
         logits_std = logits_temp.detach().std().item()
         
         # Route based on current phase (Uniform < 30 epochs, Specialized >= 30 epochs)
+        if current_epoch == None:
+            return self._specialized_routing(X, logits_temp, logits_std)
         if current_epoch < 30:
             return self._uniform_routing(X, logits_temp, logits_std)
         else:
