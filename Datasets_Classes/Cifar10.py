@@ -55,13 +55,6 @@ class CIFAR10TrainDataset(Dataset):
         if self.transforms:
             img = self.transforms(img)
 
-        val_transforms = trs.Compose([
-            trs.Resize((32, 32)),
-            trs.CenterCrop(32),
-            trs.ToTensor(),
-            trs.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
-        ])
-
         return imgaes, labels
 
 class CIFAR10ValidationDataset(Dataset):
@@ -79,11 +72,8 @@ class CIFAR10ValidationDataset(Dataset):
         self.lables = cifar10_dataset.labels_validation
 
         self.transforms = trs.Compose([
-            trs.RandomCrop(32, padding=4),
+            trs.Resize((32, 32)),
             trs.CenterCrop(32),
-            trs.RandomHorizontalFlip(p=0.5),
-            trs.RandomRotation(degrees=15),
-            trs.ColorJitter(brightness=0.2, contrast=0.2),
             trs.ToTensor(),
             trs.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
         ])
@@ -103,6 +93,9 @@ class CIFAR10ValidationDataset(Dataset):
         """
         imgaes = self.data[idx]
         labels = self.lables[idx]
+
+        if self.transforms:
+            img = self.transforms(imgaes)
 
         return imgaes, labels
 
