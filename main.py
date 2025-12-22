@@ -85,7 +85,7 @@ def download_pascal_voc():
         print(f"An error occurred while downloading or extracting the dataset: {e}")
         return None
 
-def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py/data_batch_'):
+def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py'):
     """
     Initialize the CIFAR-10 dataset and create DataLoaders for training and validation.
 
@@ -171,9 +171,9 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 5e-5
-    dropout = 0.10
-    weight_decay = 1e-4
+    lr = 1e-4
+    dropout = 0.05
+    weight_decay = 1e-5
     hidden_size = 256
 
     # Hyperparameters of router
@@ -188,8 +188,8 @@ if __name__ == "__main__":
     alpha_epochs = 80
 
     temp_init = 2.0
-    temp_mid = 1.5
-    temp_final = 1.2
+    temp_mid = 1.8
+    temp_final = 1.5 
     temp_epochs = 80
 
     # Training metrics
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-36'
+        name = 'Test-41'
     )
 
     checkpoint_callback = ModelCheckpoint(
