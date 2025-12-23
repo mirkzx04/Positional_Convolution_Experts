@@ -28,7 +28,7 @@ class PCELayer(nn.Module):
             )
             for _ in range(num_experts)
         ])
-
+        self.merge_gn = nn.GroupNorm(num_groups=min(8, out_channel), num_channels=out_channel)
         self.router_gate = RouterGate(gate_channel, hidden_size, num_experts)
 
         self.patch_size = patch_size

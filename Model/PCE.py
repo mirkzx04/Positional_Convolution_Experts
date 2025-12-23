@@ -51,7 +51,7 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        self.pooler = nn.AdaptiveAvgPool2d(1)
+        self.pooler = nn.AdaptiveAvgPool2d(2)
         self.flatten = nn.Flatten()
 
         last_channel = self.create_layers(
@@ -70,13 +70,18 @@ class PCENetwork(nn.Module):
             capacity_factor_eval=capacity_factor_val,
             noise_std=noise_std
         )
-
+        print(last_channel)
         self.prediction_head = nn.Sequential(
-            nn.LayerNorm(last_channel),
-            nn.Linear(last_channel, 4 * last_channel),
+            # nn.LayerNorm(last_channel),
+            nn.Linear(4 * last_channel, 8 * last_channel),
             nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(4 * last_channel, num_classes),
+            # nn.Dropout(0.1),
+            nn.Linear(8 * last_channel, num_classes),
+        )
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=3, bias=False, padding=1),
+            nn.BatchNorm2d(16),
+            nn.SiLU(inplace=True)
         )
         
         self.moe_aggregator = MoEAggregator(
@@ -103,7 +108,7 @@ class PCENetwork(nn.Module):
         patch_size = self.patch_extractor.patch_size
         fourier_freq = self.patch_extractor.num_frequencies
         fourier_channel = get_fourie_channel(fourier_freq)
-        inpt_channel = 3
+        inpt_channel = 16
         out_channel = 16
         downsampling = False
 
@@ -187,10 +192,12 @@ class PCENetwork(nn.Module):
         # Cache batch size to avoid repeated tensor accesses
         batch_size = X.shape[0]
 
+        X = self.stem(X)
         for layer_idx, layer in enumerate(self.layers):
             # Store layer attributes for cleaner access
             patch_size = layer.patch_size
             experts = layer.experts
+            merge_gn = layer.merge_gn
             
             # Extract patches from the current feature map
             h_patches, w_patches, X_positional, X_patches_reshape, X_patches = self.get_patches(X, patch_size)
@@ -258,7 +265,8 @@ class PCENetwork(nn.Module):
                 'b (h w) c ph pw -> b c (h ph) (w pw)',
                 h=h_patches,
                 w=w_patches
-            )            
+            )         
+            output = merge_gn(output)
             X = output
 
             tot_z_loss += z_loss

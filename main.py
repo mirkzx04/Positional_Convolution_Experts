@@ -171,7 +171,7 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 1e-4
+    lr = 2.5e-4
     dropout = 0.05
     weight_decay = 1e-5
     hidden_size = 256
@@ -183,13 +183,13 @@ if __name__ == "__main__":
     capacity_factor_train = 4.0
     capacity_factor_val = 4.0
 
-    alpha_init = 0.0
-    alpha_final = 1e-2
+    alpha_init = 1e-2
+    alpha_final = 5e-3
     alpha_epochs = 80
 
     temp_init = 2.0
-    temp_mid = 1.8
-    temp_final = 1.5 
+    temp_mid = 1.5
+    temp_final = 1.0
     temp_epochs = 80
 
     # Training metrics
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-41'
+        name = 'Test-42'
     )
 
     checkpoint_callback = ModelCheckpoint(
