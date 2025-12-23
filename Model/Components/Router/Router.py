@@ -45,12 +45,6 @@ class Router(nn.Module):
 
         self.router_temp = router_temp
 
-        self.register_buffer(
-            "usage_ema",
-            torch.full((num_experts,), 1.0 / num_experts, dtype=torch.float32)
-        )
-        self.ema_beta = 0.9
-        self.load_bias_scale = 3.0
 
     def forward(self, X, router_gate, current_epoch = None):
         """
@@ -99,24 +93,7 @@ class Router(nn.Module):
         E = self.num_experts
         
         z_loss = self.z_loss(logits)
-        # diverity_loss = self.diverity_loss(logits)
-        # z_loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
-
-        # Add Gumbel noise to logits during training to encourage exploration
-        # if self.training:
-        #    u = torch.rand_like(logits).clamp_(1e-6, 1-1e-6)
-        #    g = -torch.log(-torch.log(u))
-
-        #    logits = logits + self.noise_std * g
-
-        # # # Push sub use experts
-        # pi = 1.0 / E
-        # adj = self.load_bias_scale * (
-        #     math.log(pi) - torch.log(self.usage_ema.clamp_min(1e-6))
-        # )  # [E]
-        # logits = logits + adj
-
-        # Apply softmax to get probabilities
+        
         probs = F.softmax(logits.float(), dim = 1) # [N, num_experts]
 
         N, E = probs.shape
