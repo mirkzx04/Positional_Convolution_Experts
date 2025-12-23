@@ -18,6 +18,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from Datasets_Classes.Cifar10 import CIFAR10Dataset, CIFAR10TrainDataset, CIFAR10ValidationDataset
+from Datasets_Classes.Cifar100 import CIFAR100Dataset, CIFAR100TrainDataset, CIFAR100ValidationDataset
 from Datasets_Classes.TinyImageNet import TinyImageNetDataset, TinyImageNetTrainDataset, TinyImageNetValidationDataset
 
 from Model.PCE import PCENetwork
@@ -25,103 +26,45 @@ from Model.PCE import PCENetwork
 # from Datasets_Classes.PascalVOC import PascalVOCDataset, PascalVOCTrainDataset, PascalVOCValidationDataset
 # from Datasets_Classes.PatchExtractor import PatchExtractor
 
-from Training.EMADiffLitModule import EMADiffLitModule
+from EMADiffLitModule import EMADiffLitModule
 
-def download_tiny_imagenet():
-    """
-    Download the Tiny ImageNet dataset.
-    """
-    url = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
-    filename = "tiny-imagenet-200.zip"
-    tiny_dir = "./Data/tiny-imagenet-200"
-
-    if os.path.exists(tiny_dir):
-        print("Tiny ImageNet dataset already exists.")
-        return tiny_dir
-    
-    print("Downloading Tiny ImageNet dataset...")
-
-    try:
-        urllib.request.urlretrieve(url, filename)
-        print("Download complete.")
-
-        print("Extracting Tiny ImageNet dataset...")
-        with tarfile.open(filename, "r:gz") as tar:
-            tar.extractall(path="./Data")
-
-        os.remove(filename)  # Remove the zip file after extraction
-        print("Extraction complete.")
-        return tiny_dir
-    except Exception as e:
-        print(f"An error occurred while downloading or extracting the dataset: {e}")
-        return None
-
-def download_pascal_voc():
-    """
-    Download the Pascal VOC dataset.
-    """
-    url = "http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar"
-    filename = "VOCtrainval_11-May-2012.tar"
-    pascal_dir = "./Data/Pascal_VOC"
-
-    if os.path.exists(pascal_dir):
-        print("Pascal VOC dataset already exists.")
-        return pascal_dir
-    
-    print("Downloading Pascal VOC dataset...")
-
-    try:
-        urllib.request.urlretrieve(url, filename)
-        print("Download complete.")
-
-        print("Extracting Pascal VOC dataset...")
-        with tarfile.open(filename, "r") as tar:
-            tar.extractall(path="./Data")
-
-        os.remove(filename)  # Remove the tar file after extraction
-        print("Extraction complete.")
-        return pascal_dir
-    except Exception as e:
-        print(f"An error occurred while downloading or extracting the dataset: {e}")
-        return None
+def count_number_of_classes(train_labels, val_labels):   
+    return len(np.unique(np.concatenate([train_labels, val_labels])).tolist())
 
 def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py'):
     """
     Initialize the CIFAR-10 dataset and create DataLoaders for training and validation.
 
     Args:
-        cifar10_path : Path of the CIFAR-10 dataset
+        batch_size (int) 
+        cifar10_path (str): Path of the CIFAR-10 dataset
     """
     print('-- Initializing the CIFAR-10 dataset... -- ')
     # Create CIFAR-10 dataset
     cifar10 = CIFAR10Dataset(cifar10_path)
-    cifar10_train_set = CIFAR10TrainDataset(cifar10)
-    cifar10_val_set = CIFAR10ValidationDataset(cifar10)
+    cifar10_train = CIFAR10TrainDataset(cifar10)
+    cifar10_val = CIFAR10ValidationDataset(cifar10)
 
     # Create DataLoader for CIFAR-10 training and validation datasets
-    cifar10_train_dataloader = DataLoader(cifar10_train_set, batch_size=batch_size, shuffle=True)
-    cifar10_val_dataloader = DataLoader(cifar10_val_set, batch_size=batch_size, shuffle=False)
+    cifar10_train_loader = DataLoader(cifar10_train, batch_size=batch_size, shuffle=True)
+    cifar10_val_loader = DataLoader(cifar10_val, batch_size=batch_size, shuffle=False)
 
     # Get numer of classes in labels
-    all_labeles = np.concatenate([cifar10_train_set.lables, cifar10_val_set.lables])
-    unique_labels = np.unique(all_labeles).tolist()
-    num_classes = len(unique_labels)
+    num_classes = count_number_of_classes(cifar10_train.lables, cifar10_val.lables)
 
-    cifar10_dict = {
+    return {
         'datasets': {
-            'train': cifar10_train_set,
-            'val': cifar10_val_set,
+            'train': cifar10_train,
+            'val': cifar10_val,
         },
         'dataloaders': {
-            'train': cifar10_train_dataloader,
-            'val': cifar10_val_dataloader
+            'train': cifar10_train_loader,
+            'val': cifar10_val_loader
         },
         'name' : 'CIFAR10',
         'num_classes' : num_classes,
-        'unique_lables' : unique_labels
     }
 
-    return cifar10_dict
 
 def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-200'):
     """
@@ -159,6 +102,35 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
 
     return tiny_image_net_dic
 
+def get_cifar100_sets(batch_size, cifar100_path = './Data/cifar-100-python'):
+    """
+    Initialize the Cifar-100 dataset and create Dataloaders for training and validation
+    Args : 
+        batch_size (int) 
+        cifar100_path (str): Path of the CIFAR-100 dataset
+    """
+    cifar100 = CIFAR100Dataset(cifar100_path)
+    cifar100_train = CIFAR100TrainDataset(cifar100)
+    cifar100_val = CIFAR10ValidationDataset(cifar100)
+
+    cifar100_train_loader = DataLoader(cifar100_train, batch_size=batch_size, shuffle=True)
+    cifar100_val_loader = DataLoader(cifar100_val, batch_size=batch_size, shuffle=True)
+
+    num_classes = count_number_of_classes(cifar100_train.lables, cifar100_val.lables)
+
+    return {
+        'datasets': {
+            'train': cifar100_train,
+            'val': cifar100_val,
+        },
+        'dataloaders': {
+            'train': cifar100_train_loader,
+            'val': cifar100_val_loader
+        },
+        'name' : 'CIFAR100',
+        'num_classes' : num_classes,
+    }
+
 if __name__ == "__main__":
 
     train_datasets = []
@@ -172,7 +144,7 @@ if __name__ == "__main__":
     layer_number = 6
     patch_size = 16
     lr = 2.5e-4
-    dropout = 0.05
+    dropout = 0.10
     weight_decay = 1e-5
     hidden_size = 256
 
@@ -185,15 +157,15 @@ if __name__ == "__main__":
 
     alpha_init = 1e-2
     alpha_final = 5e-3
-    alpha_epochs = 80
+    alpha_epochs =  100
 
     temp_init = 2.0
     temp_mid = 1.5
     temp_final = 1.0
-    temp_epochs = 80
+    temp_epochs = 100
 
     # Training metrics
-    train_epochs = 200
+    train_epochs = 250
     uniform_epochs = 30
     batch_size = 32
 
@@ -203,41 +175,20 @@ if __name__ == "__main__":
     print(f"Training: epochs={train_epochs}, batch={batch_size}\n")
     print('\n ------------------------ \n')
 
-    # Initialize patch extractor
-    # patch_extractor = PatchExtractor(patch_size=patch_size)
+    # cifar10_sets = get_cifar10_sets(batch_size)
+    cifar100_sets = get_cifar100_sets(batch_size)
+    train_loader = cifar100_sets['dataloaders']['train']
+    val_loader = cifar100_sets['dataloaders']['val']
+    num_classes = cifar100_sets['num_classes']
 
-    # # Create DataLoader for training and validation of all datasets
-    # Load Cifar-10 Sets
-    cifar10_sets = get_cifar10_sets(batch_size)
-    train_datasets.append(cifar10_sets)
-
-    # Load TinyImageNet sets
-    # tinyimagenet_sets = get_tinyimagenet_sets(batch_size)
-    # train_datasets.append(tinyimagenet_sets)  
-
-    # Load pascalvoc sets
-    # pascalvoc_sets = get_pascalvoc_sets()
-    # train_datasets.append(pascalvoc_sets)
-
-    #  idx of the dataset : 
-    #     0 -> Cifar10
-    #     1 -> Tiny-ImageNet
-    dataset_idx = 0
-        
-    # Define dataset and dataloader
-    train_dataset = train_datasets[dataset_idx]['datasets']['train']
-    
-    train_loader = train_datasets[dataset_idx]['dataloaders']['train']
-    validation_loader = train_datasets[dataset_idx]['dataloaders']['val']
-    num_classes = train_datasets[dataset_idx]['num_classes']
-    class_names = train_datasets[dataset_idx]['unique_lables']
+    print(f'Num classes : {num_classes}')
 
     print(f'--- Dataset loaded --- \n')
     # Defines checkpointer and Logger
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-42'
+        name = 'Test-CIFAR-100-1'
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -262,10 +213,10 @@ if __name__ == "__main__":
         )
 
     lit_module = EMADiffLitModule(
-        pce=pce, lr=lr, weight_decay=weight_decay, device=device, class_names=class_names, 
-        train_epochs=train_epochs, uniform_epochs=uniform_epochs, alpha_init=alpha_init, 
-        alpha_final=alpha_final, alpha_epochs=alpha_epochs, temp_init=temp_init, temp_mid = temp_mid, temp_final=temp_final,
-        temp_epochs=temp_epochs
+        pce=pce, lr=lr, weight_decay=weight_decay, device=device, train_epochs=train_epochs, 
+        uniform_epochs=uniform_epochs, alpha_init=alpha_init,  alpha_final=alpha_final, 
+        alpha_epochs=alpha_epochs, temp_init=temp_init, temp_mid = temp_mid, 
+        temp_final=temp_final,temp_epochs=temp_epochs, num_classes=num_classes
     )
     trainer = pl.Trainer(
         max_epochs=train_epochs,
@@ -279,6 +230,6 @@ if __name__ == "__main__":
 
     print(f'--- Start training --- \n')
     if os.path.exists('checkpoints/last.ckpt'):
-        trainer.fit(lit_module, train_loader, validation_loader, ckpt_path='checkpoints/last.ckpt')
+        trainer.fit(lit_module, train_loader, val_loader, ckpt_path='checkpoints/last.ckpt')
     else:
-        trainer.fit(lit_module, train_loader, validation_loader)
+        trainer.fit(lit_module, train_loader, val_loader)
