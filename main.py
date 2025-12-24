@@ -145,7 +145,7 @@ if __name__ == "__main__":
     patch_size = 16
     lr = 2.5e-4
     dropout = 0.10
-    weight_decay = 1e-5
+    weight_decay = 2e-4
     hidden_size = 256
 
     # Hyperparameters of router
@@ -155,13 +155,13 @@ if __name__ == "__main__":
     capacity_factor_train = 4.0
     capacity_factor_val = 4.0
 
-    alpha_init = 1e-2
-    alpha_final = 5e-3
+    alpha_init = 1.5e-2
+    alpha_final = 3.5e-3
     alpha_epochs =  100
 
     temp_init = 2.0
     temp_mid = 1.5
-    temp_final = 1.0
+    temp_final = 0.9
     temp_epochs = 100
 
     # Training metrics
