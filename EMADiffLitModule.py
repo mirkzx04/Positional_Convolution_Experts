@@ -106,7 +106,7 @@ class EMADiffLitModule(pl.LightningModule):
         }
         # Loss function
         self.val_loss = torch.nn.CrossEntropyLoss()
-        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.05)
 
 
     def forward(self, x, force_specialized = False):
@@ -380,15 +380,15 @@ class EMADiffLitModule(pl.LightningModule):
         router_start_epoch = self.router_start_epoch
         router_warmup = self.router_warmup
 
-        eta_min = 1
+        eta_min = 0.1
         boost = 1.0
-        decay_start_frac = 0.6
+        decay_start_frac = 0.4
 
         def backbone_lr_lambda(epoch):
             e = self.current_epoch
             T = self.train_epochs
             warm = self.warmup_backbone
-            decay_start = max(decay_start_frac * T)
+            decay_start = int(decay_start_frac * T)
 
             # Linear Warmup 1 
             if e < warm:
@@ -408,7 +408,7 @@ class EMADiffLitModule(pl.LightningModule):
             if epoch < router_start_epoch:
                return 0.0
 
-            return 0.7 * backbone_lr_lambda*epoch
+            return 0.7 * backbone_lr_lambda(epoch)
         
         # Optimizer
         self.optimizer = AdamW(
