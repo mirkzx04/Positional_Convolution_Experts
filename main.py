@@ -143,9 +143,9 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 2.5e-4
+    lr = 3e-4
     dropout = 0.10
-    weight_decay = 2e-4
+    weight_decay = 1.5e-4
     hidden_size = 256
 
     # Hyperparameters of router
@@ -188,7 +188,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-CIFAR-100-1'
+        name = 'Test-CIFAR-100-3'
     )
 
     checkpoint_callback = ModelCheckpoint(
