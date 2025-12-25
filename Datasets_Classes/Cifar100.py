@@ -74,6 +74,7 @@ class CIFAR100TrainDataset(Dataset):
             trs.RandomRotation(degrees=15),
             trs.ColorJitter(brightness=0.2, contrast=0.2),
             trs.ToTensor(),
+            trs.RandomErasing(p = 0.25, scale=(0.02, 0.33), ratio = (0.3, 3.3)),
             trs.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
         ])
         
