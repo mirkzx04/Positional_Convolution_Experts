@@ -106,7 +106,7 @@ class EMADiffLitModule(pl.LightningModule):
         }
         # Loss function
         self.val_loss = torch.nn.CrossEntropyLoss()
-        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.05)
+        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.01)
 
 
     def forward(self, x, force_specialized = False):
@@ -236,7 +236,6 @@ class EMADiffLitModule(pl.LightningModule):
         if e < t0:
             return 0.0
         
-
         alpha_init  = float(self.alpha_init)
         alpha_final = float(self.alpha_final)
 
