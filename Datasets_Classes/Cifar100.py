@@ -68,14 +68,26 @@ class CIFAR100TrainDataset(Dataset):
         self.data = cifar100_dataset.data_train
         self.lables = cifar100_dataset.labels_train
 
+        mean = (0.5071, 0.4867, 0.4408)
+        std  = (0.2675, 0.2565, 0.2761)
+
         self.transforms = trs.Compose([
-            trs.RandomCrop(32, padding=4),
+            trs.RandomCrop(32, padding=4, padding_mode="reflect"),
             trs.RandomHorizontalFlip(p=0.5),
-            trs.RandomRotation(degrees=15),
-            trs.ColorJitter(brightness=0.2, contrast=0.2),
+            trs.ColorJitter(
+                brightness=0.10,
+                contrast=0.10,
+                saturation=0.10,
+                hue=0.02
+            ),
             trs.ToTensor(),
-            trs.RandomErasing(p = 0.25, scale=(0.02, 0.33), ratio = (0.3, 3.3)),
-            trs.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
+            trs.RandomErasing(
+                p=0.10,
+                scale=(0.02, 0.20), 
+                ratio=(0.30, 3.30),
+                value="random"
+            ),
+            trs.Normalize(mean, std),
         ])
         
     def __len__(self):
