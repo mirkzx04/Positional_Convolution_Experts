@@ -20,7 +20,6 @@ class PCENetwork(nn.Module):
                     patch_size,
                     dropout,
                     num_classes,
-                    hidden_size,
                     router_temp,
                     noise_epsilon,
                     noise_std,
@@ -58,7 +57,6 @@ class PCENetwork(nn.Module):
             num_experts=num_experts,
             dropout=dropout,
             layer_number=layer_number,
-            hidden_size = hidden_size
         )        
 
         self.router = Router(
@@ -75,7 +73,7 @@ class PCENetwork(nn.Module):
             # nn.LayerNorm(last_channel),
             nn.Linear(4 * last_channel, 8 * last_channel),
             nn.GELU(),
-            # nn.Dropout(0.1),
+            nn.Dropout(0.3),
             nn.Linear(8 * last_channel, num_classes),
         )
         self.stem = nn.Sequential(
@@ -88,7 +86,7 @@ class PCENetwork(nn.Module):
             num_experts=[num_experts] * layer_number,
             num_layers=layer_number,
         )
-    def create_layers(self, num_experts, dropout, layer_number, hidden_size):
+    def create_layers(self, num_experts, dropout, layer_number):
         """
         Create layers of PCE Network
 
@@ -123,7 +121,6 @@ class PCENetwork(nn.Module):
                 patch_size=patch_size,
                 fourie_freq=fourier_freq,
                 gate_channel=gate_channel,
-                hidden_size=hidden_size,
                 downsampling = downsampling,
             ))
             downsampling = False
