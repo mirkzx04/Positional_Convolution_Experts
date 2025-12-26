@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class RouterGate(nn.Module):
-    def __init__(self, in_channel, hidden_size, num_experts, out_channel = 64):
+    def __init__(self, in_channel, num_experts):
         super().__init__()
         
         # self.projection = nn.Linear(in_channel, out_channel)
@@ -13,15 +13,7 @@ class RouterGate(nn.Module):
             nn.LayerNorm(in_size),
             nn.Linear(in_size, num_experts, bias=True),
         )
-        # self.head_w = nn.Parameter(
-        #     torch.empty(out_channel, num_experts)
-        # )
-        # nn.init.orthogonal_(self.head_w)
-
-        # self.logit_scale = nn.Parameter(
-        #     torch.tensor(float(10.0)).log()
-        # )
-        # self.bias = nn.Parameter(torch.zeros(num_experts))
+        self.k = 1
         self.initialize_weights()
 
     def forward(self, X):
@@ -35,12 +27,7 @@ class RouterGate(nn.Module):
         
         # Norm and MLP
         logits = self.mlp(X_cat).to(dtype=torch.float32)
-        logits = logits - logits.mean(dim = -1, keepdim = True)
-        
-        # logits_norm = F.normalize(logits, dim = -1)
-        # w_n = F.normalize(self.head_w, dim = 0)
-        # scale = self.logit_scale.exp().clamp(1.0, 100.0)
-        # logits = (scale * (logits_norm @ w_n) + self.bias)
+        logits = logits - self.k * logits.mean(dim = -1, keepdim = True)
 
         return logits.to(dtype=torch.float32)
 

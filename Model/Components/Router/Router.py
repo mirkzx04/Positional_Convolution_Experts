@@ -142,12 +142,6 @@ class Router(nn.Module):
         combine  = (w[:, :, None] * one_hot_pos).to(X.dtype)                   # [N, E, Ccap]
         dispatch = (mask[:, :, None].bool() & one_hot_pos.bool())   
 
-        load_per_exp = mask.float().mean(dim = 0)
-        with torch.no_grad():
-            self.usage_ema.mul_(self.ema_beta).add_(
-                (1.0 - self.ema_beta) * load_per_exp
-            )
-
         return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
 
     def _uniform_routing(self, X, logits, logits_std):
