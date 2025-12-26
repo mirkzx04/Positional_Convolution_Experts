@@ -111,10 +111,10 @@ def get_cifar100_sets(batch_size, cifar100_path = './Data/cifar-100-python'):
     """
     cifar100 = CIFAR100Dataset(cifar100_path)
     cifar100_train = CIFAR100TrainDataset(cifar100)
-    cifar100_val = CIFAR10ValidationDataset(cifar100)
+    cifar100_val = CIFAR100ValidationDataset(cifar100)
 
     cifar100_train_loader = DataLoader(cifar100_train, batch_size=batch_size, shuffle=True)
-    cifar100_val_loader = DataLoader(cifar100_val, batch_size=batch_size, shuffle=True)
+    cifar100_val_loader = DataLoader(cifar100_val, batch_size=batch_size, shuffle=False)
 
     num_classes = count_number_of_classes(cifar100_train.lables, cifar100_val.lables)
 
@@ -143,10 +143,9 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 6
     patch_size = 16
-    lr = 3e-4
+    lr = 2.5e-4
     dropout = 0.10
-    weight_decay = 1.5e-4
-    hidden_size = 256
+    weight_decay = 2e-4
 
     # Hyperparameters of router
     noise_epsilon = 0.2
@@ -156,13 +155,13 @@ if __name__ == "__main__":
     capacity_factor_val = 4.0
 
     alpha_init = 1.5e-2
-    alpha_final = 3.5e-3
-    alpha_epochs =  100
+    alpha_final = 5e-3
+    alpha_epochs =  80
 
     temp_init = 2.0
     temp_mid = 1.5
-    temp_final = 0.9
-    temp_epochs = 100
+    temp_final = 1.0
+    temp_epochs = 80
 
     # Training metrics
     train_epochs = 250
@@ -171,7 +170,6 @@ if __name__ == "__main__":
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
-    print(f"Router: hidden size={hidden_size}")
     print(f"Training: epochs={train_epochs}, batch={batch_size}\n")
     print('\n ------------------------ \n')
 
@@ -188,7 +186,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-CIFAR-100-3'
+        name = 'Test-CIFAR-100-4'
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -204,7 +202,6 @@ if __name__ == "__main__":
         patch_size = patch_size,
         dropout=dropout,
         num_classes=num_classes,
-        hidden_size=hidden_size,
         router_temp=temp_init,
         noise_epsilon = noise_epsilon,
         capacity_factor_train = capacity_factor_train,
