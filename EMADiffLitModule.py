@@ -72,7 +72,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.router_mul = 2.0
         self.warmup_backbone = 10
         self.router_start_epoch = 30
-        self.router_warmup = 5
+        self.router_warmup = 10
         self.use_augmentation = True
         
         self.train_epochs = train_epochs
@@ -198,7 +198,9 @@ class EMADiffLitModule(pl.LightningModule):
             self._unfreeze_router()
             self.aux_loss_weight = self.alpha_scheduler()
             self.model.router.router_temp = self.temp_scheduler()
-            self.model.router.k = self.k_scheduler()
+            k = float(self.k_scheduler)
+            for l in self.model.layers:
+                l.router_gate.k = k
 
     #----- SCHEDULERS -----
     def temp_scheduler(self):
@@ -366,7 +368,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.router_w, self.router_bias, self.backbone_params = [], [], []
         for name, p in self.model.named_parameters():
             if 'router_gate' in name or 'router' in name or 'gate' in name:
-                (self.router_bias if p.dim==1 else self.router_w).append(p)
+                (self.router_bias if p.dim()==1 else self.router_w).append(p)
             else:
                 self.backbone_params.append(p)
 
@@ -380,42 +382,41 @@ class EMADiffLitModule(pl.LightningModule):
         router_start_epoch = self.router_start_epoch
         router_warmup = self.router_warmup
 
-        eta_min = 0.1
-        boost = 1.0
-        decay_start_frac = 0.4
+        eta_min = 1e-6
 
         def backbone_lr_lambda(epoch):
-            e = self.current_epoch
-            T = self.train_epochs
-            warm = self.warmup_backbone
-            decay_start = int(decay_start_frac * T)
+            if epoch < warmup_backbone:
+                pct = epoch / warmup_backbone
+                return eta_min + (1 - eta_min) * pct
+            else : 
+                progress = (epoch - warmup_backbone) / (tot_epochs - warmup_backbone) 
+                progress = min(progress, 1.0)
 
-            # Linear Warmup 1 
-            if e < warm:
-                pct = (e + 1) / float(max(1, warm))
-                return 0.1 + 0.9 * pct
-            
-            if e < decay_start:
-                return 1.0
-            
-            progress = (e - decay_start) / float(max(1, T - decay_start))
-            progress = min(max(progress, 0.0), 1.0)
-            cosine = 0.5 * (1 + math.cos(math.pi * progress))
-
-            return eta_min + (1.0 - eta_min) * cosine
+                cosine_dec = 0.5 * (1 + math.cos(math.pi * progress))
+                return eta_min + (1 - eta_min) * cosine_dec
 
         def router_lr_lambda(epoch):
             if epoch < router_start_epoch:
                return 0.0
 
-            return 0.7 * backbone_lr_lambda(epoch)
-        
+            # Linear Warmup
+            if epoch < router_start_epoch + router_warmup:
+                pct = (epoch - router_start_epoch + 1) / float(max(1, router_warmup))
+                return eta_min + (1 - eta_min) * pct
+
+            # Cosine decay
+            start = router_start_epoch + router_warmup
+            progress = (epoch - start) / float(max(1, tot_epochs - start))
+            progress = min(progress, 1.0)
+            cosine_dec = 0.5 * (1 + math.cos(math.pi * progress))
+            return eta_min + (1 - eta_min) * cosine_dec
+
         # Optimizer
         self.optimizer = AdamW(
             [
                 {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
-                {'params': self.router_w, 'lr': 2e-5, 'weight_decay': 0, 'name' : 'router_w'},
-                {'params' : self.router_bias, 'lr' : 2e-5, 'weight_decay': 0, 'name' : 'router_bias'}
+                {'params': self.router_w, 'lr': base_lr * self.router_mul, 'weight_decay': 0, 'name' : 'router_w'},
+                {'params' : self.router_bias, 'lr' : base_lr * self.router_mul, 'weight_decay': 0, 'name' : 'router_bias'}
             ], betas=(0.9, 0.999)
         )
 
