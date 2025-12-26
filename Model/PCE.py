@@ -73,12 +73,12 @@ class PCENetwork(nn.Module):
             # nn.LayerNorm(last_channel),
             nn.Linear(4 * last_channel, 8 * last_channel),
             nn.GELU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.1),
             nn.Linear(8 * last_channel, num_classes),
         )
         self.stem = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=3, bias=False, padding=1),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(3, 32, kernel_size=3, bias=False, padding=1),
+            nn.BatchNorm2d(32),
             nn.SiLU(inplace=True)
         )
         
@@ -106,8 +106,8 @@ class PCENetwork(nn.Module):
         patch_size = self.patch_extractor.patch_size
         fourier_freq = self.patch_extractor.num_frequencies
         fourier_channel = get_fourie_channel(fourier_freq)
-        inpt_channel = 16
-        out_channel = 16
+        inpt_channel = 32
+        out_channel = 32
         downsampling = False
 
         for l in range(layer_number):
