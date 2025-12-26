@@ -233,23 +233,6 @@ class EMADiffLitModule(pl.LightningModule):
         tw = self.router_warmup         
         te = self.alpha_epochs
 
-        if e < t0 or e < t0 + tw:
-            return alpha_init 
-        
-        if e < te:
-            progress = (e - (t0 + tw)) / float(max(1, te - (t0 + tw)))
-            progress = min(max(progress, 0.0), 1.0)
-            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))  # 0→1
-            alpha_mid = 0.5 * (alpha_init + alpha_final)
-            return alpha_mid + (alpha_final - alpha_mid) * cosine_inc
-
-        return alpha_final
-    
-    def k_scheduler(self):
-        e = self.current_epoch
-        t0 = self.router_start_epoch
-        tw = self.router_warmup
-        
         if e < t0:
             return 0.0
         
@@ -271,6 +254,27 @@ class EMADiffLitModule(pl.LightningModule):
             return alpha_warm_end + (alpha_final - alpha_warm_end) * cosine_inc
 
         return alpha_final
+    
+    def k_scheduler(self):
+        e = self.current_epoch
+        t0 = self.router_start_epoch
+        tw = self.router_warmup
+
+        tdec = max(self.temp_epochs, t0 + tw + 1)
+        
+        if e < t0 or e < t0 + tw:
+            return 1.0
+        
+        if e < tdec:
+            progress = (e - (t0 + tw)) / float(max(1, tdec - (t0 + tw)))
+            progress = min(max(progress, 0.0), 1.0)
+
+            slow_progress = progress ** 2
+
+            k_final = 0.25 
+            return 1.0 - slow_progress * (1.0 - k_final)
+
+        return 0.25
     #----- SCHEDULERS -----
 
     def on_train_epoch_end(self):
