@@ -198,7 +198,7 @@ class EMADiffLitModule(pl.LightningModule):
             self._unfreeze_router()
             self.aux_loss_weight = self.alpha_scheduler()
             self.model.router.router_temp = self.temp_scheduler()
-            k = float(self.k_scheduler)
+            k = float(self.k_scheduler())
             for l in self.model.layers:
                 l.router_gate.k = k
 
@@ -261,7 +261,7 @@ class EMADiffLitModule(pl.LightningModule):
         tw = self.router_warmup
 
         tdec = max(self.temp_epochs, t0 + tw + 1)
-        
+
         if e < t0 or e < t0 + tw:
             return 1.0
         
