@@ -142,9 +142,9 @@ if __name__ == "__main__":
     # Hyperparameters of model
     num_exp = 10
     layer_number = 6
-    patch_size = 16
-    lr = 2.5e-4
-    dropout = 0.10
+    patch_size = 12
+    lr = 5e-4
+    dropout = 0.05
     weight_decay = 2e-4
 
     # Hyperparameters of router
@@ -154,18 +154,18 @@ if __name__ == "__main__":
     capacity_factor_train = 4.0
     capacity_factor_val = 4.0
 
-    alpha_init = 1.5e-2
-    alpha_final = 5e-3
+    alpha_init = 7.5e-3
+    alpha_final = 1e-3
     alpha_epochs =  80
 
-    temp_init = 2.0
-    temp_mid = 1.5
+    temp_init = 2.5
+    temp_mid = 2.0
     temp_final = 1.0
     temp_epochs = 80
 
     # Training metrics
-    train_epochs = 250
-    uniform_epochs = 30
+    train_epochs = 300
+    uniform_epochs = 50
     batch_size = 32
 
     print("\n--- Hyperparameters ---")
