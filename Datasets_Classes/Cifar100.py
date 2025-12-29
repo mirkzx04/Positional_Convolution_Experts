@@ -75,14 +75,14 @@ class CIFAR100TrainDataset(Dataset):
             trs.RandomCrop(32, padding=4, padding_mode="reflect"),
             trs.RandomHorizontalFlip(p=0.5),
             trs.ColorJitter(
-                brightness=0.10,
-                contrast=0.10,
-                saturation=0.10,
-                hue=0.02
+                brightness=0.15,
+                contrast=0.20,
+                saturation=0.20,
+                hue=0.05
             ),
             trs.ToTensor(),
             trs.RandomErasing(
-                p=0.10,
+                p=0.25,
                 scale=(0.02, 0.20), 
                 ratio=(0.30, 3.30),
                 value="random"

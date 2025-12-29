@@ -19,5 +19,6 @@ Doc/Math_doc_en/math_doc.synctex.gz
 Doc/Experiments/Experiments_it.md
 Checkpoints_story
 checkpoints
-
+.agent
+Model-CIFAR-10
 

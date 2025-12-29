@@ -1,6 +1,8 @@
 import torch
-from torch import nn as  nn
 import torch.functional as F
+
+from torch import nn as  nn
+from timm.models.layers import DropPath
 # import timmù
 class ConvExpert(nn.Module):
     def __init__(self, in_channel, out_channel, dropout, use_residual=True, downsampling = False):
@@ -20,6 +22,7 @@ class ConvExpert(nn.Module):
         self.out_channel = out_channel
         self.hidden_channel = out_channel * 4
         self.final_act = nn.SiLU(inplace=True)
+        self.drop_path = DropPath(drop_prob=dropout)
 
         stride = 2 if downsampling else 1
 
@@ -65,5 +68,7 @@ class ConvExpert(nn.Module):
         out = self.conv_block(X)
 
         if self.use_residual:
-           out = out + self.skip(X)
+           out = self.drop_path(out) + self.skip(X)
+        else : 
+            out = self.drop_path(out)
         return self.final_act(out)

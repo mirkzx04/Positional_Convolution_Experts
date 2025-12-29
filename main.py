@@ -141,31 +141,31 @@ if __name__ == "__main__":
 
     # Hyperparameters of model
     num_exp = 10
-    layer_number = 6
-    patch_size = 12
-    lr = 5e-4
-    dropout = 0.05
-    weight_decay = 2e-4
+    layer_number = 4
+    patch_size = 16
+    lr = 1e-3
+    dropout = 0.10
+    weight_decay = 1e-4
 
     # Hyperparameters of router
     noise_epsilon = 0.2
-    noise_std = 0.1
+    noise_std = 0.01
 
     capacity_factor_train = 4.0
     capacity_factor_val = 4.0
 
-    alpha_init = 7.5e-3
-    alpha_final = 1e-3
-    alpha_epochs =  80
+    alpha_init = 1e-2
+    alpha_final = 3.5e-3
+    alpha_epochs =  100
 
-    temp_init = 2.5
-    temp_mid = 2.0
-    temp_final = 1.0
+    temp_init = 2.0
+    temp_mid = 1.5
+    temp_final = 0.85
     temp_epochs = 80
 
     # Training metrics
-    train_epochs = 300
-    uniform_epochs = 50
+    train_epochs = 250
+    uniform_epochs = 30
     batch_size = 32
 
     print("\n--- Hyperparameters ---")
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-CIFAR-100-4'
+        name = 'Test-CIFAR-100-4',
     )
 
     checkpoint_callback = ModelCheckpoint(

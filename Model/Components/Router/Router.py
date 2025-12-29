@@ -19,7 +19,7 @@ class Router(nn.Module):
         router_temp = 1.5,
         capacity_factor_train = 1.25,
         capacity_factor_eval = 1.50,
-        noise_std = 0.20,
+        noise_std = 0.02,
         ):
         super().__init__()
         """
@@ -93,8 +93,12 @@ class Router(nn.Module):
         E = self.num_experts
         
         z_loss = self.z_loss(logits)
+        if self.train and self.noise_std > 0:
+            noise = torch.rand_like(logits.float()) * self.noise_std
+            logits = logits + noise
         
         probs = F.softmax(logits.float(), dim = 1) # [N, num_experts]
+        
 
         N, E = probs.shape
 

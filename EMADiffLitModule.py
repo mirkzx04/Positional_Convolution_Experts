@@ -71,7 +71,7 @@ class EMADiffLitModule(pl.LightningModule):
 
         self.router_mul = 2.0
         self.warmup_backbone = 5
-        self.router_start_epoch = 10
+        self.router_start_epoch = 30
         self.router_warmup = 5
         self.use_augmentation = True
         
@@ -222,26 +222,29 @@ class EMADiffLitModule(pl.LightningModule):
         return self.temp_final
 
     def alpha_scheduler(self):
-        e = self.current_epoch
+        e = int(self.current_epoch)
+
         a0 = float(self.alpha_init)
         a1 = float(self.alpha_final)
 
-        t0 = int(self.router_start_epoch)   # start router
-        tw = int(self.router_warmup)        # warmup router
+        t0 = int(self.router_start_epoch)
+        tw = int(self.router_warmup)
+        T  = int(self.alpha_epochs)
 
-        if e < t0:
-            return 0.0 
+        start = t0 + tw
 
-        start_cos = t0 + tw
-        if e < start_cos:
+        if e < start:
             return a0
 
-        end_cos = start_cos + int(self.alpha_epochs)
-        if e < end_cos:
-            progress = (e - start_cos) / float(max(1, end_cos - start_cos))  # 0 -> 1
+        end = start + T
+        if e < end:
+            progress = (e - start) / float(max(1, end - start))  # 0 -> 1
             progress = min(max(progress, 0.0), 1.0)
-            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))          # 0 -> 1
-            return a0 + (a1 - a0) * cosine_inc
+
+            # "cosine_dec": 1 -> 0
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))
+
+            return a1 + (a0 - a1) * cosine_dec  # a0 -> a1
 
         return a1
     #----- SCHEDULERS -----
@@ -365,21 +368,36 @@ class EMADiffLitModule(pl.LightningModule):
         router_warmup = self.router_warmup
 
         eta_min = 1e-6
-        boost = 2.0
 
-        def backbone_lr_lambda(epoch):
-            if epoch < warmup_backbone:
-                pct = epoch / warmup_backbone
-                return eta_min + (1 - eta_min) * pct
-            if epoch < router_start_epoch + router_warmup: 
-                pct = (epoch - router_start_epoch + 1) / float(max(1, router_warmup))
-                return eta_min + (boost - eta_min)
-        
-            start = router_start_epoch + router_warmup
-            progress = (epoch - start) / float(max(1, tot_epochs - start))
-            progress = min(progress,1.0)
-            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
-            return eta_min + (boost - eta_min) * cosine
+        def backbone_lr_lambda(epoch: int):
+            e  = int(epoch)
+            wb = int(warmup_backbone)
+            rs = int(router_start_epoch)
+            rw = int(router_warmup)
+            T  = int(tot_epochs)
+
+            # 1) Warmup backbone
+            if e < wb:
+                pct = (e + 1) / float(max(1, wb))                 # (0,1]
+                return eta_min + (1.0 - eta_min) * pct
+
+            if e < rs:
+                span = max(1, rs - wb)
+                progress = (e - wb) / float(span)                 # 0 -> 1
+                progress = min(max(progress, 0.0), 1.0)
+                cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
+                return eta_min + (1.0 - eta_min) * cosine_dec
+
+            if e < rs + rw:
+                pct = (e - rs + 1) / float(max(1, rw))            # (0,1]
+                return eta_min + (1.0 - eta_min) * pct
+
+            start = rs + rw
+            span = max(1, T - start)
+            progress = (e - start) / float(span)                  # 0 -> 1
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))      # 1 -> 0
+            return eta_min + (1.0 - eta_min) * cosine_dec
 
         def router_lr_lambda(epoch):
             if epoch < router_start_epoch:
