@@ -70,9 +70,9 @@ class EMADiffLitModule(pl.LightningModule):
         self.num_classes = num_classes
 
         self.router_mul = 2.0
-        self.warmup_backbone = 10
+        self.warmup_backbone = 5
         self.router_start_epoch = 10
-        self.router_warmup = 10
+        self.router_warmup = 5
         self.use_augmentation = True
         
         self.train_epochs = train_epochs
@@ -198,9 +198,6 @@ class EMADiffLitModule(pl.LightningModule):
             self._unfreeze_router()
             self.aux_loss_weight = self.alpha_scheduler()
             self.model.router.router_temp = self.temp_scheduler()
-            k = float(self.k_scheduler())
-            for l in self.model.layers:
-                l.router_gate.k = k
 
     #----- SCHEDULERS -----
     def temp_scheduler(self):
@@ -247,31 +244,6 @@ class EMADiffLitModule(pl.LightningModule):
             return a0 + (a1 - a0) * cosine_inc
 
         return a1
-    
-    def k_scheduler(self):
-        e = self.current_epoch
-
-        t0 = int(self.router_start_epoch)
-        tw = int(self.router_warmup)
-
-        k0 = 1.0
-        k1 = 0.25
-
-        start_cos = t0 + tw
-
-        # Prima dell’avvio router e durante warmup: k = 1.0
-        if e < start_cos:
-            return k0
-
-        # Cosine da 1.0 -> 0.25 per alpha_epochs epoche (come richiesto)
-        end_cos = start_cos + int(self.alpha_epochs)
-        if e < end_cos:
-            progress = (e - start_cos) / float(max(1, end_cos - start_cos))  # 0 -> 1
-            progress = min(max(progress, 0.0), 1.0)
-            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))          # 0 -> 1
-            return k0 + (k1 - k0) * cosine_inc
-
-        return k1
     #----- SCHEDULERS -----
 
     def on_train_epoch_end(self):
@@ -292,7 +264,9 @@ class EMADiffLitModule(pl.LightningModule):
             'LR_backbone : ' : self.optimizer.param_groups[0]['lr'],
             'LR_Router' : self.optimizer.param_groups[1]['lr'],
             'Gradient norm backbone' : torch.tensor(self.gradient_norm_backbone).mean().item(),
-            'Gradient norm router' : torch.tensor(self.gradient_norm_router).mean().item()
+            'Gradient norm router' : torch.tensor(self.gradient_norm_router).mean().item(),
+            'alpha_loss' : torch.tensor(self.aux_loss_weight),
+            'temp_logits' : torch.tensor(self.model.router.router_temp),
         }
 
         self.train_class_losses.clear()

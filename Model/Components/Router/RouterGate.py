@@ -8,12 +8,11 @@ class RouterGate(nn.Module):
         super().__init__()
         
         # self.projection = nn.Linear(in_channel, out_channel)
-        in_size = 3 * in_channel
+        in_size = 2 * in_channel
         self.mlp = nn.Sequential(
             nn.LayerNorm(in_size),
             nn.Linear(in_size, num_experts, bias=True),
         )
-        self.k = 1
         self.initialize_weights()
 
     def forward(self, X):
@@ -22,12 +21,12 @@ class RouterGate(nn.Module):
         # Extract X statistics
         avg_pooling = X.mean(dim = (2, 3)).to(dtype=torch.float32) # [B*P, C]
         max_pooling = X.amax(dim = (2, 3)).to(dtype=torch.float32 ) # [B*P, C]
-        min_pooling = X.amin(dim = (2, 3)).to(dtype = torch.float32) # [B*P, C]
-        X_cat = torch.cat([avg_pooling, max_pooling, min_pooling], dim = 1) # [B*P, 3 * C]
+        # min_pooling = X.amin(dim = (2, 3)).to(dtype = torch.float32) # [B*P, C]
+        X_cat = torch.cat([avg_pooling, max_pooling], dim = 1) # [B*P, 3 * C]
         
         # Norm and MLP
         logits = self.mlp(X_cat).to(dtype=torch.float32)
-        logits = logits - self.k * logits.mean(dim = -1, keepdim = True)
+        logits = logits - 0.5 * logits.mean(dim = -1, keepdim = True)
 
         return logits.to(dtype=torch.float32)
 
