@@ -141,9 +141,9 @@ if __name__ == "__main__":
 
     # Hyperparameters of model
     num_exp = 10
-    layer_number = 4
+    layer_number = 18
     patch_size = 16
-    lr = 1e-3
+    lr = 3e-4
     dropout = 0.10
     weight_decay = 1e-4
 
@@ -154,19 +154,19 @@ if __name__ == "__main__":
     capacity_factor_train = 4.0
     capacity_factor_val = 4.0
 
-    alpha_init = 1e-2
-    alpha_final = 3.5e-3
+    alpha_init = 1.5e-2
+    alpha_final = 4e-3
     alpha_epochs =  100
 
-    temp_init = 2.0
+    temp_init = 2.5
     temp_mid = 1.5
     temp_final = 0.85
-    temp_epochs = 80
+    temp_epochs = 100
 
     # Training metrics
     train_epochs = 250
     uniform_epochs = 30
-    batch_size = 32
+    batch_size = 128
 
     print("\n--- Hyperparameters ---")
     print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
@@ -186,8 +186,10 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-CIFAR-100-4',
+        name = 'Test-CIFAR-100-6',
     )
+    logger.experiment.define_metric("epoch")
+    logger.experiment.define_metric("*", step_metric="epoch")
 
     checkpoint_callback = ModelCheckpoint(
         save_top_k=0,
@@ -208,6 +210,7 @@ if __name__ == "__main__":
         capacity_factor_val = capacity_factor_val,
         noise_std=noise_std
         )
+    # pce = torch.compile(pce, mode="reduce-overhead")
 
     lit_module = EMADiffLitModule(
         pce=pce, lr=lr, weight_decay=weight_decay, device=device, train_epochs=train_epochs, 
