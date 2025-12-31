@@ -32,3 +32,4 @@ class PCELayer(nn.Module):
 
         self.patch_size = patch_size
         self.fourier_freq = fourie_freq
+        self.downsampling = downsampling

@@ -23,10 +23,9 @@ class RouterGate(nn.Module):
         max_pooling = X.amax(dim = (2, 3)).to(dtype=torch.float32 ) # [B*P, C]
         # min_pooling = X.amin(dim = (2, 3)).to(dtype = torch.float32) # [B*P, C]
         X_cat = torch.cat([avg_pooling, max_pooling], dim = 1) # [B*P, 3 * C]
-        
         # Norm and MLP
         logits = self.mlp(X_cat).to(dtype=torch.float32)
-        logits = logits - 0.5 * logits.mean(dim = -1, keepdim = True)
+        logits = logits - 1 * logits.mean(dim = -1, keepdim = True)
 
         return logits.to(dtype=torch.float32)
 
