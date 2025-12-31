@@ -22,7 +22,7 @@ class ConvExpert(nn.Module):
         self.out_channel = out_channel
         self.hidden_channel = out_channel * 4
         self.final_act = nn.SiLU(inplace=True)
-        self.drop_path = DropPath(drop_prob=dropout)
+        self.drop_path = DropPath(drop_prob=dropout * 0.5)
 
         stride = 2 if downsampling else 1
 

@@ -190,7 +190,7 @@ class PCENetwork(nn.Module):
 
         X = self.stem(X)
         for layer_idx, layer in enumerate(self.layers):
-            if isinstance(layer, nn.Sequential):
+            if isinstance(layer, DownsampleResBlock):
                 X = layer(X)
             else :
                 # Store layer attributes for cleaner access
@@ -201,7 +201,7 @@ class PCENetwork(nn.Module):
                 # Extract patches from the current feature map
                 pre_layer = self.layers[layer_idx - 1] if layer_idx - 1 < len(self.layers) else None
 
-                if isinstance(pre_layer, nn.Sequential) or pre_layer is None or layer_idx == 0: 
+                if isinstance(pre_layer, DownsampleResBlock) or pre_layer is None or layer_idx == 0: 
                     h_patches, w_patches, X_positional, X_patches_reshape, X_patches = self.get_patches(X, patch_size)
                     X_tokens = X_patches_reshape
 
@@ -266,7 +266,7 @@ class PCENetwork(nn.Module):
 
                 # Reassemble patches back into spatial feature map
                 next_layer = self.layers[layer_idx + 1] if layer_idx + 1 < len(self.layers) else None
-                if next_layer is None or isinstance(next_layer, nn.Sequential):
+                if next_layer is None or isinstance(next_layer, DownsampleResBlock):
                     X = rearrange(
                         outputs.view(batch_size, -1, C_out, H_out, W_out), 
                         'b (h w) c ph pw -> b c (h ph) (w pw)',
