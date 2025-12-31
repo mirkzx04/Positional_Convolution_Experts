@@ -154,8 +154,8 @@ if __name__ == "__main__":
     capacity_factor_train = 4.0
     capacity_factor_val = 4.0
 
-    alpha_init = 1.5e-2
-    alpha_final = 4e-3
+    alpha_init = 1e-2
+    alpha_final = 1e-3
     alpha_epochs =  100
 
     temp_init = 2.5
