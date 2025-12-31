@@ -16,6 +16,8 @@ from torchmetrics import Accuracy
 
 import torch.nn as nn
 
+from Model.Components.DownsampleResBlock import DownsampleResBlock
+
 class EMADiffLitModule(pl.LightningModule):
     def __init__(
                 self, 
@@ -368,7 +370,7 @@ class EMADiffLitModule(pl.LightningModule):
         router_start_epoch = self.router_start_epoch
         router_warmup = self.router_warmup
 
-        eta_min = 1e-6
+        eta_min = 1e-3
 
         def backbone_lr_lambda(epoch: int):
             e  = int(epoch)
@@ -422,7 +424,7 @@ class EMADiffLitModule(pl.LightningModule):
                 {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
                 {'params': self.router_w, 'lr': 2e-5, 'weight_decay': 0, 'name' : 'router_w'},
                 {'params' : self.router_bias, 'lr' : 2e-5, 'weight_decay': 0, 'name' : 'router_bias'}
-            ], betas=(0.9, 0.999)
+            ], betas=(0.9, 0.95)
         )
 
         self.lr_scheduler = LambdaLR(self.optimizer, lr_lambda=[
@@ -435,7 +437,7 @@ class EMADiffLitModule(pl.LightningModule):
 
     def _freeze_router(self):
         for l in self.model.layers:
-            if not isinstance(l, nn.Sequential):
+            if not isinstance(l, DownsampleResBlock):
                 for p in l.router_gate.parameters():
                     p.requires_grad_(False)
 
@@ -444,7 +446,7 @@ class EMADiffLitModule(pl.LightningModule):
     
     def _unfreeze_router(self):
         for l in self.model.layers:
-            if not isinstance(l, nn.Sequential):
+            if not isinstance(l, DownsampleResBlock):
                 for p in l.router_gate.parameters():
                     p.requires_grad_(True)
         
