@@ -14,6 +14,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, SequentialLR
 
 from torchmetrics import Accuracy
 
+import torch.nn as nn
+
 class EMADiffLitModule(pl.LightningModule):
     def __init__(
                 self, 
@@ -243,7 +245,6 @@ class EMADiffLitModule(pl.LightningModule):
 
             # "cosine_dec": 1 -> 0
             cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))
-
             return a1 + (a0 - a1) * cosine_dec  # a0 -> a1
 
         return a1
@@ -434,27 +435,18 @@ class EMADiffLitModule(pl.LightningModule):
 
     def _freeze_router(self):
         for l in self.model.layers:
-            for p in l.router_gate.parameters():
-                p.requires_grad_(False)
+            if not isinstance(l, nn.Sequential):
+                for p in l.router_gate.parameters():
+                    p.requires_grad_(False)
 
         for p in self.model.router.parameters():
             p.requires_grad_(False)
     
     def _unfreeze_router(self):
         for l in self.model.layers:
-            for p in l.router_gate.parameters():
-                p.requires_grad_(True)
+            if not isinstance(l, nn.Sequential):
+                for p in l.router_gate.parameters():
+                    p.requires_grad_(True)
         
         for p in self.model.router.parameters():
             p.requires_grad_(True)
-
-    def _freeze_backbone(self):
-        for name, p in self.model.named_parameters():
-            if "router" in name or "prediction_head" in name:
-                p.requires_grad = True
-            else:
-                p.requires_grad = False
-
-    def _unfreeze_all(self):
-        for _, p in self.model.named_parameters():
-            p.requires_grad = True
