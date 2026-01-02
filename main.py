@@ -143,9 +143,9 @@ if __name__ == "__main__":
     num_exp = 10
     layer_number = 18
     patch_size = 16
-    lr = 6e-4
+    lr = 7e-4
     dropout = 0.05
-    weight_decay = 2e-4
+    weight_decay = 1e-4
 
     # Hyperparameters of router
     noise_epsilon = 0.2

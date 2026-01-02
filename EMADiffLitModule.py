@@ -372,7 +372,7 @@ class EMADiffLitModule(pl.LightningModule):
 
         eta_min = 1e-3
         eta_min_router = 1e-6
-        pre_router = 0.35
+        pre_router = 0.30
 
         def backbone_lr_lambda(epoch: int):
             e  = int(epoch)
