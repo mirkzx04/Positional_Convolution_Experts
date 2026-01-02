@@ -372,7 +372,7 @@ class EMADiffLitModule(pl.LightningModule):
 
         eta_min = 1e-3
         eta_min_router = 1e-6
-        pre_router = 0.20
+        pre_router = 0.35
 
         def backbone_lr_lambda(epoch: int):
             e  = int(epoch)
@@ -386,7 +386,6 @@ class EMADiffLitModule(pl.LightningModule):
                 pct = (e + 1) / float(max(1, wb))  # (0,1]
                 return eta_min + (1.0 - eta_min) * pct
 
-            # 2) cosine: 1.0 -> pre_router   (fino al router start)
             if e < rs:
                 span = max(1, rs - wb)
                 progress = (e - wb) / float(span)  # 0 -> 1
@@ -394,12 +393,10 @@ class EMADiffLitModule(pl.LightningModule):
                 cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
                 return pre_router + (1.0 - pre_router) * cosine_dec
 
-            # 3) warmup2: pre_router -> 1.0 (router warmup)
             if e < rs + rw:
                 pct = (e - rs + 1) / float(max(1, rw))  # (0,1]
                 return pre_router + (1.0 - pre_router) * pct
 
-            # 4) cosine: 1.0 -> eta_min (resto training)
             start = rs + rw
             span = max(1, T - start)
             progress = (e - start) / float(span)  # 0 -> 1

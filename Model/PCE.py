@@ -74,7 +74,7 @@ class PCENetwork(nn.Module):
             # nn.LayerNorm(last_channel),
             nn.Linear(last_channel, 4 * last_channel),
             nn.GELU(),
-            nn.Dropout(0.10),
+            nn.Dropout(0.05),
             nn.Linear(4 * last_channel, num_classes),
         )
         self.stem = nn.Sequential(
@@ -116,7 +116,7 @@ class PCENetwork(nn.Module):
             if l > 0 and l % 8 == 0:
                 transition_out = inpt_channel * 2
                 self.layers.append(
-                    DownsampleResBlock(in_ch = inpt_channel, out_ch= out_channel)
+                    DownsampleResBlock(in_ch = inpt_channel, out_ch= transition_out)
                 )
                 
                 inpt_channel = transition_out

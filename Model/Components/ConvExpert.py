@@ -68,7 +68,8 @@ class ConvExpert(nn.Module):
         out = self.conv_block(X)
 
         if self.use_residual:
-           out = self.drop_path(out) + self.skip(X)
-        else : 
-            out = self.drop_path(out)
+        #    out = self.drop_path(out) + self.skip(X)
+            out += self.skip(X)
+        # else : 
+        #     out = self.drop_path(out)
         return self.final_act(out)
