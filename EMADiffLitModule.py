@@ -183,7 +183,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.gradient_norm_backbone.append(total_norm_backbone ** 0.5)
 
         torch.nn.utils.clip_grad_norm_(self.router_params, max_norm=0.1)
-        torch.nn.utils.clip_grad_norm_(self.backbone_params, max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.backbone_params, max_norm=5.0)
 
     def on_train_epoch_start(self):
         self.accuracy_metrics['top1_train'].reset()
@@ -371,6 +371,8 @@ class EMADiffLitModule(pl.LightningModule):
         router_warmup = self.router_warmup
 
         eta_min = 1e-3
+        eta_min_router = 1e-6
+        pre_router = 0.20
 
         def backbone_lr_lambda(epoch: int):
             e  = int(epoch)
@@ -379,44 +381,54 @@ class EMADiffLitModule(pl.LightningModule):
             rw = int(router_warmup)
             T  = int(tot_epochs)
 
-            # 1) Warmup backbone
+            # 1) warmup: eta_min -> 1.0
             if e < wb:
-                pct = (e + 1) / float(max(1, wb))                 # (0,1]
+                pct = (e + 1) / float(max(1, wb))  # (0,1]
                 return eta_min + (1.0 - eta_min) * pct
 
+            # 2) cosine: 1.0 -> pre_router   (fino al router start)
             if e < rs:
                 span = max(1, rs - wb)
-                progress = (e - wb) / float(span)                 # 0 -> 1
+                progress = (e - wb) / float(span)  # 0 -> 1
                 progress = min(max(progress, 0.0), 1.0)
                 cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-                return eta_min + (1.0 - eta_min) * cosine_dec
+                return pre_router + (1.0 - pre_router) * cosine_dec
 
+            # 3) warmup2: pre_router -> 1.0 (router warmup)
             if e < rs + rw:
-                pct = (e - rs + 1) / float(max(1, rw))            # (0,1]
-                return eta_min + (1.0 - eta_min) * pct
+                pct = (e - rs + 1) / float(max(1, rw))  # (0,1]
+                return pre_router + (1.0 - pre_router) * pct
 
+            # 4) cosine: 1.0 -> eta_min (resto training)
             start = rs + rw
             span = max(1, T - start)
-            progress = (e - start) / float(span)                  # 0 -> 1
+            progress = (e - start) / float(span)  # 0 -> 1
             progress = min(max(progress, 0.0), 1.0)
-            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))      # 1 -> 0
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
             return eta_min + (1.0 - eta_min) * cosine_dec
 
-        def router_lr_lambda(epoch):
-            if epoch < router_start_epoch:
-               return 0.0
 
-            # Linear Warmup
-            if epoch < router_start_epoch + router_warmup:
-                pct = (epoch - router_start_epoch + 1) / float(max(1, router_warmup))
-                return eta_min + (1 - eta_min) * pct
+        def router_lr_lambda(epoch: int):
+            e  = int(epoch)
+            rs = int(router_start_epoch)
+            rw = int(router_warmup)
+            T  = int(tot_epochs)
 
-            # Cosine decay
-            start = router_start_epoch + router_warmup
-            progress = (epoch - start) / float(max(1, tot_epochs - start))
-            progress = min(progress, 1.0)
-            cosine_dec = 0.5 * (1 + math.cos(math.pi * progress))
-            return eta_min + (1 - eta_min) * cosine_dec
+            if e < rs:
+                return 0.0
+
+            # linear warmup: eta_min_router -> 1.0
+            if e < rs + rw:
+                pct = (e - rs + 1) / float(max(1, rw))  # (0,1]
+                return eta_min_router + (1.0 - eta_min_router) * pct
+
+            # cosine: 1.0 -> eta_min_router
+            start = rs + rw
+            span = max(1, T - start)
+            progress = (e - start) / float(span)
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return eta_min_router + (1.0 - eta_min_router) * cosine_dec
 
         # Optimizer
         self.optimizer = AdamW(

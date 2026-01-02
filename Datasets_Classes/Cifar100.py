@@ -80,6 +80,7 @@ class CIFAR100TrainDataset(Dataset):
                 saturation=0.20,
                 hue=0.05
             ),
+            trs.RandAugment(num_ops=2, magnitude=9),
             trs.ToTensor(),
             trs.RandomErasing(
                 p=0.25,
