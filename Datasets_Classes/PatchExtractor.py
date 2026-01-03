@@ -40,6 +40,7 @@ class PatchExtractor(nn.Module):
         patch_pos_feats = torch.cat([coords, coords_fourier], dim = -1)
         patch_pos_feats = patch_pos_feats.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, self.patch_size, self.patch_size)
 
+        return patch_pos_feats
     def get_coords(self, h_patches, w_patches, B, img_device):
         # Create axis
         h_coords = torch.linspace(0.0, 1.0, h_patches, device=img_device)

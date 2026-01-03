@@ -75,7 +75,7 @@ class EMADiffLitModule(pl.LightningModule):
 
         self.router_mul = 2.0
         self.warmup_backbone = 5
-        self.router_start_epoch = 30
+        self.router_start_epoch = uniform_epochs
         self.router_warmup = 5
         self.use_augmentation = True
         
@@ -110,7 +110,7 @@ class EMADiffLitModule(pl.LightningModule):
         }
         # Loss function
         self.val_loss = torch.nn.CrossEntropyLoss()
-        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.01)
+        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.05)
 
 
     def forward(self, x, force_specialized = False):

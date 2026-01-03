@@ -51,9 +51,7 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        self.pooler = nn.AdaptiveAvgPool2d(1)
-        self.flatten = nn.Flatten()
-
+        
         last_channel = self.create_layers(
             num_experts=num_experts,
             dropout=dropout,
@@ -69,17 +67,19 @@ class PCENetwork(nn.Module):
             capacity_factor_eval=capacity_factor_val,
             noise_std=noise_std
         )
-        print(last_channel)
+
+        self.pooler = nn.AdaptiveAvgPool2d(1)
+        self.flatten = nn.Flatten()
         self.prediction_head = nn.Sequential(
             # nn.LayerNorm(last_channel),
-            nn.Linear(last_channel, 4 * last_channel),
-            nn.GELU(),
-            nn.Dropout(0.05),
-            nn.Linear(4 * last_channel, num_classes),
+            nn.Linear(last_channel, num_classes),
+            # nn.GELU(),
+            # nn.Dropout(0.05),
+            # nn.Linear(4 * last_channel, num_classes),
         )
         self.stem = nn.Sequential(
-            nn.Conv2d(3, 8, kernel_size=3, bias=False, padding=1),
-            nn.BatchNorm2d(8),
+            nn.Conv2d(3, 24, kernel_size=3, bias=False, padding=1),
+            nn.BatchNorm2d(24),
             nn.SiLU(inplace=True)
         )
         
@@ -111,13 +111,13 @@ class PCENetwork(nn.Module):
         patch_size = self.patch_extractor.patch_size
         fourier_freq = self.patch_extractor.num_frequencies
         fourier_channel = get_fourie_channel(fourier_freq)
-        inpt_channel = 8
-        out_channel = 8
+        inpt_channel = 24
+        out_channel = 24
 
         for l in range(layer_number):
             current_gate_channel = inpt_channel + fourier_channel
 
-            if l > 0 and l % 8 == 0:
+            if l in [2, 4, 6]:
                 transition_out = inpt_channel * 2
                 self.layers.append(
                     DownsampleResBlock(in_ch = inpt_channel, out_ch= transition_out)
@@ -125,8 +125,11 @@ class PCENetwork(nn.Module):
                 
                 inpt_channel = transition_out
                 out_channel = transition_out
-                patch_size = max(2, patch_size // 4) 
 
+                if l == 2 :
+                    patch_size = patch_size // 4
+                else : 
+                    patch_size = max(1, patch_size // 2)
             else:
                 self.layers.append(PCELayer(
                     inpt_channel=inpt_channel,
@@ -140,27 +143,6 @@ class PCENetwork(nn.Module):
                 ))
                 
         return out_channel
-
-    def get_patches(self, X, patch_size):
-        """
-        Get patches and patches information
-
-        Args:
-            X (torch.Tensor) : Tensor of shape [B, C, H, W]
-        """
-        # Get patches
-        self.patch_extractor.patch_size = patch_size
-        h_patches, w_patches, X_positional, X_patches = self.patch_extractor(X)
-        
-        # Reshape X_patches
-        B, P, C, pH, pW = X_patches.shape
-        X_patches_reshape = X_patches.reshape(B*P, C, pH, pW)
-
-        # Reshape X_patcches_coords
-        B, P, C, pH, pW = X_positional.shape
-        X_positional = X_positional.reshape(B*P, C, pH, pW)
-
-        return h_patches, w_patches, X_positional, X_patches_reshape, X_patches
 
     def forward(self, X, current_epoch=None):
         """
@@ -218,7 +200,8 @@ class PCENetwork(nn.Module):
                     X_tokens = X # Shape : [N, C, H, W]
                 
                 # Get positional features from fourier
-                positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device).reshape(B * P, -1, 1, 1).expand(-1, -1, h_patches, w_patches)
+                positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device)
+                positional_features = positional_features.flatten(0, 1)
 
                 # tokens enriched with positional features 
                 X_positional = torch.cat([X_tokens, positional_features], dim = 1)
@@ -241,41 +224,42 @@ class PCENetwork(nn.Module):
                     )
 
                 E, Ccap = dispatch.shape[1], dispatch.shape[2]
-                
-                # Allocate buffer for expert inputs with proper device and dtype
-                expert_inputs = X_tokens.new_zeros((E, Ccap, C, H, W))
 
                 # Extract routing indices for scatter operation
                 n_idx, e_idx, c_idx = self._indices_from_dispatch(dispatch)
                 
                 # Distribute patches to their assigned expert slots
-                if n_idx.numel() > 0:
-                    expert_inputs[e_idx, c_idx] = X_tokens[n_idx]
+                if n_idx.numel() == 0:
+                    X = X  # no-op, per chiarezza
+                    continue
                 
                 # Process each expert independently on its assigned patches
-                expert_outputs_list = []
-                
-                for i, expert in enumerate(experts):
-                    expert_outputs_list.append(expert(expert_inputs[i]))
+                outputs = None
+                per_exp_token_idx = [None] * E  # n_idx for each experts 
+                per_exp_slot_idx  = [None] * E  # c_idx correspondents
+                for e in range(E):
+                    mask_e = (e_idx == e)
+                    if mask_e.any():
+                        per_exp_token_idx[e] = n_idx[mask_e]
+                        per_exp_slot_idx[e]  = c_idx[mask_e]
 
-                expert_outputs = torch.stack(expert_outputs_list, dim=0) 
-                
-                # Get output dimensions from processed patches
-                _, _, C_out, H_out, W_out = expert_outputs.shape
+                # Process only experts with tokens
+                for e, expert in enumerate(experts):
+                    n_e = per_exp_token_idx[e]
+                    if n_e is None:
+                        continue
 
-                # Preallocate output buffer for gathering results
-                outputs = X_tokens.new_zeros((N, C_out, H_out, W_out))
-                
-                if n_idx.numel() > 0:
-                    # Apply routing weights to expert outputs
-                    gates = combine[n_idx, e_idx, c_idx].to(dtype=expert_outputs.dtype).view(-1, 1, 1, 1)
-                    
-                    # Compute weighted contributions from each expert
-                    contrib = expert_outputs[e_idx, c_idx] * gates
-                    
-                    # Accumulate contributions back to their original patch positions
-                    outputs.index_add_(0, n_idx, contrib.to(outputs.dtype))
+                    # Tokens for experts e
+                    x_e = X_tokens[n_e]  # [Ne, C, H, W]
+                    y_e = expert(x_e)    # [Ne, C_out, H_out, W_out]
+                    if outputs is None:
+                        _, C_out, H_out, W_out = y_e.shape
+                        outputs = X_tokens.new_zeros((N, C_out, H_out, W_out))
+                    c_e = per_exp_slot_idx[e]                                  # [Ne]
+                    w_e = combine[n_e, e, c_e].to(dtype=y_e.dtype).view(-1, 1, 1, 1)  # [Ne,1,1,1]
 
+                    contrib = y_e * w_e  # [Ne, C_out, H_out, W_out]
+                    outputs.index_add_(0, n_e, contrib)
                 # Reassemble patches back into spatial feature map
                 next_layer = self.layers[layer_idx + 1] if layer_idx + 1 < len(self.layers) else None
                 if next_layer is None or isinstance(next_layer, DownsampleResBlock):

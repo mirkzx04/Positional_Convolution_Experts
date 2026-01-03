@@ -140,10 +140,10 @@ if __name__ == "__main__":
     print('\n ------------------------ \n')
 
     # Hyperparameters of model
-    num_exp = 10
-    layer_number = 18
+    num_exp = 16
+    layer_number = 8
     patch_size = 16
-    lr = 7e-4
+    lr = 6e-4
     dropout = 0.05
     weight_decay = 1e-4
 
@@ -151,21 +151,21 @@ if __name__ == "__main__":
     noise_epsilon = 0.2
     noise_std = 0.01
 
-    capacity_factor_train = 4.0
-    capacity_factor_val = 4.0
+    capacity_factor_train = 2.0
+    capacity_factor_val = 2.0
 
     alpha_init = 1.5e-2
     alpha_final = 1e-3
-    alpha_epochs =  100
+    alpha_epochs =  80
 
-    temp_init = 2.5
+    temp_init = 2.0
     temp_mid = 1.0
-    temp_final = 0.80
+    temp_final = 0.85
     temp_epochs = 100
 
     # Training metrics
-    train_epochs = 300
-    uniform_epochs = 30
+    train_epochs = 350
+    uniform_epochs = 35
     batch_size = 128
 
     print("\n--- Hyperparameters ---")
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-CIFAR-100-6',
+        name = 'Test-CIFAR-100-8',
     )
     logger.experiment.define_metric("epoch")
     logger.experiment.define_metric("*", step_metric="epoch")

@@ -20,6 +20,7 @@ class ConvExpert(nn.Module):
         self.use_residual = use_residual
         self.in_channel = in_channel
         self.out_channel = out_channel
+        self.hidden_size = out_channel * 2
         self.final_act = nn.SiLU(inplace=True)
         self.drop_path = DropPath(drop_prob=dropout * 0.5)
 
@@ -29,17 +30,17 @@ class ConvExpert(nn.Module):
         self.conv_block = nn.Sequential(
             nn.Conv2d(
                 in_channels=in_channel,
-                out_channels=out_channel,
+                out_channels=self.hidden_size,
                 kernel_size=3,
                 padding=1,
                 stride= stride,
                 bias=False
             ),
-            nn.GroupNorm(num_groups=min(8, out_channel), num_channels=out_channel),
+            nn.GroupNorm(num_groups=min(8, self.hidden_size), num_channels=self.hidden_size),
             nn.SiLU(inplace=True),
             nn.Dropout2d(dropout),
             nn.Conv2d(
-                in_channels=out_channel,
+                in_channels=self.hidden_size,
                 out_channels=out_channel,
                 kernel_size=3,
                 padding=1,

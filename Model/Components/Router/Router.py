@@ -77,7 +77,7 @@ class Router(nn.Module):
         # Route based on current phase (Uniform < 30 epochs, Specialized >= 30 epochs)
         if current_epoch == None:
             return self._specialized_routing(X, logits_temp, logits_std)
-        if current_epoch < 50:
+        if current_epoch < 35:
             return self._uniform_routing(X, logits_temp, logits_std)
         else:
             return self._specialized_routing(X, logits_temp, logits_std)
@@ -146,7 +146,7 @@ class Router(nn.Module):
         combine  = (w[:, :, None] * one_hot_pos).to(X.dtype)                   # [N, E, Ccap]
         dispatch = (mask[:, :, None].bool() & one_hot_pos.bool())   
 
-        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
+        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach()
 
     def _uniform_routing(self, X, logits, logits_std):
         """
@@ -195,7 +195,7 @@ class Router(nn.Module):
         z_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         # div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         
-        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach().cpu()
+        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach()
 
     def z_loss(self, logits):
         """
