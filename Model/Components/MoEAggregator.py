@@ -140,6 +140,11 @@ class MoEAggregator:
         logits : Tensor | None  [..., E]
             Logits del router (pre-softmax) per entropia specifica del layer.
         """
+        if layer_idx < 0 or layer_idx >= self.num_layers:
+            return
+        if self.num_experts[layer_idx] == 0:
+            return
+
         dispatch = dispatch.detach().cpu()
         combine = combine.detach().cpu()
 
@@ -223,6 +228,8 @@ class MoEAggregator:
         drop_rate = self.tot_dropped_patches / max(1, self.tot_patches)
         capacity_efficiency = self.tot_processed_patches / max(1, self.tot_capacity)
 
+        moe_layer_ids = [i for i, E in enumerate(self.num_experts) if E > 0]
+
         # ---- Per-layer summaries ----
         entropy_norm_layers = []
         cov_usage_layers = []
@@ -241,9 +248,11 @@ class MoEAggregator:
 
         eps_min = 1e-6  # per smoothing Laplace su ratio
 
-        for layer_idx, (counts, gsum, gcnt) in enumerate(
-            zip(self.usage_counts_layers, self.gate_sum_layers, self.gate_counts_layers)
-        ):
+        for layer_idx, in moe_layer_ids:
+            counts = self.usage_counts_layers[layer_idx]
+            gsum   = self.gate_sum_layers[layer_idx]
+            gcnt   = self.gate_counts_layers[layer_idx]
+            
             E = counts.numel()
             if E == 0 or counts.sum().item() == 0.0:
                 # Layer senza attività (o non ancora visto)

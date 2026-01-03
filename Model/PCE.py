@@ -83,9 +83,13 @@ class PCENetwork(nn.Module):
             nn.SiLU(inplace=True)
         )
         
+        num_experts_per_layer = [
+            len(l.experts) if isinstance(l, PCELayer) else 0
+            for l in self.layers
+        ]
         self.moe_aggregator = MoEAggregator(
-            num_experts=[num_experts] * layer_number,
-            num_layers=layer_number,
+            num_layers=len(num_experts_per_layer),
+            num_experts=num_experts_per_layer,
         )
     def create_layers(self, num_experts, dropout, layer_number):
         """
@@ -203,10 +207,10 @@ class PCENetwork(nn.Module):
                 if isinstance(pre_layer, DownsampleResBlock) or pre_layer is None or layer_idx == 0: 
                     patch_size = layer.patch_size
                     self.patch_extractor.patch_size = patch_size
-                    
+
                     # Get token from X patches
                     h_patches, w_patches, X_patches = self.patch_extractor.get_patches(X)
-                    P, C, H, W = X_patches[1:] # Shape : [B, P, C, H, W]
+                    P, C, H, W = X_patches.shape[1:] # Shape : [B, P, C, H, W]
                     N = B*P 
 
                     X_tokens = X_patches.reshape(B * P, C, H, W)

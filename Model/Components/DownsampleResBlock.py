@@ -5,15 +5,15 @@ class DownsampleResBlock(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, stride=2, padding=1, bias=False)
-        self.gn1   = nn.BatchNorm2d(out_ch)
+        nn.GroupNorm(num_groups=min(8, out_ch), num_channels=out_ch)
         self.act   = nn.SiLU(inplace=True)
 
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, stride=1, padding=1, bias=False)
-        self.gn2 = nn.BatchNorm2d(out_ch)
+        nn.GroupNorm(num_groups=min(8, out_ch), num_channels=out_ch)
 
         self.skip  = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, 1, stride=2, bias=False),
-            nn.BatchNorm2d(out_ch)
+            nn.GroupNorm(num_groups=min(8, out_ch), num_channels=out_ch)
         )
 
     def forward(self, x):
