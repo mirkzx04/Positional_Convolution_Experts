@@ -194,7 +194,6 @@ class PCENetwork(nn.Module):
                 X = layer(X)
             else :
                 # Store layer attributes for cleaner access
-                patch_size = layer.patch_size
                 experts = layer.experts
                 merge_gn = layer.merge_gn
                 
@@ -202,6 +201,9 @@ class PCENetwork(nn.Module):
                 pre_layer = self.layers[layer_idx - 1] if layer_idx - 1 < len(self.layers) else None
 
                 if isinstance(pre_layer, DownsampleResBlock) or pre_layer is None or layer_idx == 0: 
+                    patch_size = layer.patch_size
+                    self.patch_extractor.patch_size = patch_size
+                    
                     # Get token from X patches
                     h_patches, w_patches, X_patches = self.patch_extractor.get_patches(X)
                     P, C, H, W = X_patches[1:] # Shape : [B, P, C, H, W]
