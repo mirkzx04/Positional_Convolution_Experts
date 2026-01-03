@@ -185,8 +185,8 @@ class PCENetwork(nn.Module):
         tot_z_loss = 0.0
         tot_imb_loss = 0.0
 
-        # Cache batch size to avoid repeated tensor accesses
-        batch_size = X.shape[0]
+        img_device = X.device
+        B = X.shape[0]
 
         X = self.stem(X)
         for layer_idx, layer in enumerate(self.layers):
@@ -202,15 +202,21 @@ class PCENetwork(nn.Module):
                 pre_layer = self.layers[layer_idx - 1] if layer_idx - 1 < len(self.layers) else None
 
                 if isinstance(pre_layer, DownsampleResBlock) or pre_layer is None or layer_idx == 0: 
-                    h_patches, w_patches, X_positional, X_patches_reshape, X_patches = self.get_patches(X, patch_size)
-                    X_tokens = X_patches_reshape
+                    # Get token from X patches
+                    h_patches, w_patches, X_patches = self.patch_extractor.get_patches(X)
+                    P, C, H, W = X_patches[1:] # Shape : [B, P, C, H, W]
+                    N = B*P 
 
-                    # Unpack dimensions for easier reference
-                    B, P, C, H, W = X_patches.shape 
-                    N = B * P
-                else :
-                    X_tokens = X
+                    X_tokens = X_patches.reshape(B * P, C, H, W)
+                else:
+                    X_tokens = X # Shape : [N, C, H, W]
+                
+                # Get positional features from fourier
+                positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device).reshape(B * P, -1, 1, 1).expand(-1, -1, h_patches, w_patches)
 
+                # tokens enriched with positional features 
+                X_positional = torch.cat([X_tokens, positional_features], dim = 1)
+                
                 # Route patches to experts and compute auxiliary losses
                 dispatch, combine, z_loss, imb_loss, logits_std, logits = self.router(
                     X_positional, 
@@ -268,7 +274,7 @@ class PCENetwork(nn.Module):
                 next_layer = self.layers[layer_idx + 1] if layer_idx + 1 < len(self.layers) else None
                 if next_layer is None or isinstance(next_layer, DownsampleResBlock):
                     X = rearrange(
-                        outputs.view(batch_size, -1, C_out, H_out, W_out), 
+                        outputs.view(B, -1, C_out, H_out, W_out), 
                         'b (h w) c ph pw -> b c (h ph) (w pw)',
                         h=h_patches, w=w_patches
                     )

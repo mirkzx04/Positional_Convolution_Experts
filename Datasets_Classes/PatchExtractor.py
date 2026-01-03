@@ -31,7 +31,31 @@ class PatchExtractor(nn.Module):
         coords_scaled = coords.unsqueeze(-1) * freq_bands * torch.pi
         return torch.cat([torch.sin(coords_scaled), torch.cos(coords_scaled)], dim=-1).flatten(-2)
 
-    def forward(self, image):
+    def get_positional(self, h_patches, w_patches, B, img_device):
+        # Get coords
+        coords = self.get_coords(h_patches, w_patches, B, img_device)
+
+        # Get coords fourier
+        coords_fourier = self.fourier_features(coords)
+        patch_pos_feats = torch.cat([coords, coords_fourier], dim = -1)
+        patch_pos_feats = patch_pos_feats.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, self.patch_size, self.patch_size)
+
+    def get_coords(self, h_patches, w_patches, B, img_device):
+        # Create axis
+        h_coords = torch.linspace(0.0, 1.0, h_patches, device=img_device)
+        w_coords = torch.linspace(0.0, 1.0, w_patches, device= img_device)
+
+        y_grid, x_grid = torch.meshgrid(h_coords, w_coords, indexing='ij')
+
+        coords = torch.stack([x_grid, y_grid], dim = -1) # [h, w, 2]
+        coords = coords.flatten(start_dim=0, end_dim=1) #[num_patches, 2]
+ 
+        coords = torch.tensor(coords, dtype=torch.float32, device=img_device)
+        coords = repeat(coords, 'n xy -> b n xy', b = B)
+
+        return coords
+
+    def get_patches(self, image):
         """
         Dvides an image in patch and return coordinate (x,y) for every patch
 
@@ -59,54 +83,10 @@ class PatchExtractor(nn.Module):
         patches = rearrange(image,
                     'b c (h p1) (w p2) -> b (h w) c p1 p2',
                     p1=self.patch_size, p2=self.patch_size)
-        
-        # Compute number of patch for dimension
-        B = patches.shape[0]
-        num_patches = patches.shape[1]
+        patches = patches.to(image.device)
+
         h_patches = H // self.patch_size
         w_patches = W // self.patch_size
-
-        # Create axis
-        h_coords = torch.linspace(0.0, 1.0, h_patches, device=image.device)
-        w_coords = torch.linspace(0.0, 1.0, w_patches, device= image.device)
-
-        y_grid, x_grid = torch.meshgrid(h_coords, w_coords, indexing='ij')
-
-        coords = torch.stack([x_grid, y_grid], dim = -1) # [h, w, 2]
-        coords = coords.flatten(start_dim=0, end_dim=1) #[num_patches, 2]
- 
-        coords = torch.tensor(coords, dtype=torch.float32, device=image.device)
-        coords = repeat(coords, 'n xy -> b n xy', b = B)
-        
-        # Get coords fourier
-        coords_fourier = self.fourier_features(coords)
-        patch_pos_feats = torch.cat([coords, coords_fourier], dim = -1)
-        patch_pos_feats = patch_pos_feats.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, self.patch_size, self.patch_size)
-
-        # # Add pixel-level position within patch
-        # yy,xx = torch.meshgrid(
-        #     torch.linspace(0, 1, self.patch_size, device = image.device),
-        #     torch.linspace(0, 1, self.patch_size, device = image.device),
-        #     indexing='ij'
-        # )
-
-        # xx = xx.unsqueeze(0).unsqueeze(0).expand(B, num_patches, -1, -1)
-        # yy = yy.unsqueeze(0).unsqueeze(0).expand(B, num_patches, -1, -1)
-
-        # xx_feat = xx.unsqueeze(2)
-        # yy_feat = yy.unsqueeze(2)
-
-        # # Get xx and yy fourier
-        # xx_fourier = self.fourier_features(xx.unsqueeze(-1))
-        # yy_fourier = self.fourier_features(yy.unsqueeze(-1))
-
-        # xx_fourier = xx_fourier.permute(0, 1, 4, 2, 3)
-        # yy_fourier = yy_fourier.permute(0, 1, 4, 2, 3)
-
-        # pixel_feats = torch.cat([xx_feat, yy_feat, xx_fourier, yy_fourier], dim = 2)
-
-        patches = patches.to(image.device)
-        patches_with_coords = torch.cat([patches, patch_pos_feats], dim = 2)
         
         # return h_patches, w_patches, patch_pos_feats, patches
-        return h_patches, w_patches , patches_with_coords, patches
+        return h_patches, w_patches, patches
