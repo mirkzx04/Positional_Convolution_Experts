@@ -73,11 +73,11 @@ class CIFAR100TrainDataset(Dataset):
 
         self.transforms = trs.Compose([
             trs.RandomCrop(32, padding=4, padding_mode="reflect"),
-            trs.RandomHorizontalFlip(p=0.5),
+            trs.RandomHorizontalFlip(p=0.3),
             trs.ColorJitter(
                 brightness=0.15,
-                contrast=0.20,
-                saturation=0.20,
+                contrast=0.15,
+                saturation=0.15,
                 hue=0.05
             ),
             trs.RandAugment(num_ops=2, magnitude=9),

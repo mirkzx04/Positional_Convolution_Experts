@@ -1,0 +1,25 @@
+{
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "Esame",
+            "group": "Bho",
+            "database": "Bho",
+            "username": "Io"
+        },
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "PorcoDio",
+            "database": "postgres",
+            "username": "postgres"
+        }
+    ]
+}

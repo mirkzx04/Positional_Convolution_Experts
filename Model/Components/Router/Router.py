@@ -38,10 +38,9 @@ class Router(nn.Module):
         self.num_experts = num_experts
         self.num_layers = num_layers
         
-        self.noise_epsilon = noise_epsilon
         self.capacity_factor_train = capacity_factor_train
         self.capacity_factor_eval = capacity_factor_eval
-        self.noise_std = noise_std
+        self.noise_std = 0
 
         self.router_temp = router_temp
 
@@ -77,7 +76,7 @@ class Router(nn.Module):
         # Route based on current phase (Uniform < 30 epochs, Specialized >= 30 epochs)
         if current_epoch == None:
             return self._specialized_routing(X, logits_temp, logits_std)
-        if current_epoch < 35:
+        if current_epoch < 30:
             return self._uniform_routing(X, logits_temp, logits_std)
         else:
             return self._specialized_routing(X, logits_temp, logits_std)
@@ -93,12 +92,11 @@ class Router(nn.Module):
         E = self.num_experts
         
         z_loss = self.z_loss(logits)
-        if self.train and self.noise_std > 0:
+        if self.training and self.noise_std > 0:
             noise = torch.rand_like(logits.float()) * self.noise_std
             logits = logits + noise
         
         probs = F.softmax(logits.float(), dim = 1) # [N, num_experts]
-        
 
         N, E = probs.shape
 
@@ -134,7 +132,7 @@ class Router(nn.Module):
 
         # Normalize weights per expert (stop-gradient on denominator)
         raw   = (mask * expert_prob.unsqueeze(1))                              # [N, E], fp32
-        denom = raw.sum(dim=1, keepdim=True).clamp_min(1e-6).detach()          # [N, 1]
+        denom = raw.sum(dim=1, keepdim=True).detach().clamp_min(1e-6)          # [N, 1]
         w     = raw / denom                                                    # [N, E] ; sum_t w[t,e] ≈ 1
 
         # Create one-hot positions in sorted space, then restore original order

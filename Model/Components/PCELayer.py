@@ -29,7 +29,8 @@ class PCELayer(nn.Module):
         ])
         self.merge_gn = nn.GroupNorm(num_groups=min(8, out_channel), num_channels=out_channel)
         self.router_gate = RouterGate(gate_channel, num_experts)
-
+        self.gamma = nn.Parameter(torch.ones(1) * 1e-2)
+        
         self.patch_size = patch_size
         self.fourier_freq = fourie_freq
         self.downsampling = downsampling

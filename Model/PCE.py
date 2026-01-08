@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.nn import LazyLinear
 
 from einops import rearrange
+from timm.models.layers import DropPath
 
 from Model.Components.Router import Router
 from Model.Components.PCELayer import PCELayer
@@ -22,8 +23,6 @@ class PCENetwork(nn.Module):
                     dropout,
                     num_classes,
                     router_temp,
-                    noise_epsilon,
-                    noise_std,
                     capacity_factor_train,
                     capacity_factor_val,
                  ):
@@ -51,6 +50,7 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
+        self.drop_path = DropPath(0.1)
         
         last_channel = self.create_layers(
             num_experts=num_experts,
@@ -62,24 +62,23 @@ class PCENetwork(nn.Module):
             num_experts=num_experts,
             num_layers=layer_number,
             router_temp = router_temp,
-            noise_epsilon=noise_epsilon,
             capacity_factor_train=capacity_factor_train,
             capacity_factor_eval=capacity_factor_val,
-            noise_std=noise_std
         )
 
         self.pooler = nn.AdaptiveAvgPool2d(1)
         self.flatten = nn.Flatten()
         self.prediction_head = nn.Sequential(
-            # nn.LayerNorm(last_channel),
+            nn.LayerNorm(last_channel),
+            nn.Dropout(0.1),
             nn.Linear(last_channel, num_classes),
             # nn.GELU(),
             # nn.Dropout(0.05),
             # nn.Linear(4 * last_channel, num_classes),
         )
         self.stem = nn.Sequential(
-            nn.Conv2d(3, 24, kernel_size=3, bias=False, padding=1),
-            nn.BatchNorm2d(24),
+            nn.Conv2d(3, 32, kernel_size=3, bias=False, padding=1),
+            nn.BatchNorm2d(32),
             nn.SiLU(inplace=True)
         )
         
@@ -111,8 +110,8 @@ class PCENetwork(nn.Module):
         patch_size = self.patch_extractor.patch_size
         fourier_freq = self.patch_extractor.num_frequencies
         fourier_channel = get_fourie_channel(fourier_freq)
-        inpt_channel = 24
-        out_channel = 24
+        inpt_channel = 32
+        out_channel = 32
 
         for l in range(layer_number):
             current_gate_channel = inpt_channel + fourier_channel
@@ -182,6 +181,7 @@ class PCENetwork(nn.Module):
                 # Store layer attributes for cleaner access
                 experts = layer.experts
                 merge_gn = layer.merge_gn
+                gamma = layer.gamma
                 
                 # Extract patches from the current feature map
                 pre_layer = self.layers[layer_idx - 1] if layer_idx - 1 < len(self.layers) else None
@@ -196,15 +196,17 @@ class PCENetwork(nn.Module):
                     N = B*P 
 
                     X_tokens = X_patches.reshape(B * P, C, H, W)
+
+                    positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device)
+                    positional_features = positional_features.flatten(0, 1)
+
+                    # tokens enriched with positional features 
+                    X_positional = torch.cat([X_tokens, positional_features], dim = 1)
                 else:
                     X_tokens = X # Shape : [N, C, H, W]
                 
                 # Get positional features from fourier
-                positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device)
-                positional_features = positional_features.flatten(0, 1)
-
-                # tokens enriched with positional features 
-                X_positional = torch.cat([X_tokens, positional_features], dim = 1)
+                
                 
                 # Route patches to experts and compute auxiliary losses
                 dispatch, combine, z_loss, imb_loss, logits_std, logits = self.router(
@@ -260,6 +262,9 @@ class PCENetwork(nn.Module):
 
                     contrib = y_e * w_e  # [Ne, C_out, H_out, W_out]
                     outputs.index_add_(0, n_e, contrib)
+                
+                outputs = X_tokens + self.drop_path(gamma * outputs)
+                
                 # Reassemble patches back into spatial feature map
                 next_layer = self.layers[layer_idx + 1] if layer_idx + 1 < len(self.layers) else None
                 if next_layer is None or isinstance(next_layer, DownsampleResBlock):

@@ -74,7 +74,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.num_classes = num_classes
 
         self.router_mul = 2.0
-        self.warmup_backbone = 5
+        self.warmup_backbone = 15
         self.router_start_epoch = uniform_epochs
         self.router_warmup = 5
         self.use_augmentation = True
@@ -110,7 +110,7 @@ class EMADiffLitModule(pl.LightningModule):
         }
         # Loss function
         self.val_loss = torch.nn.CrossEntropyLoss()
-        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.05)
+        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
 
 
     def forward(self, x, force_specialized = False):
@@ -142,7 +142,7 @@ class EMADiffLitModule(pl.LightningModule):
         logits, z_loss, imb_loss = self(data)
 
         class_loss = self.train_loss(logits, labels)
-        z_loss_weigth = 1e-6 if self.current_epoch >= self.router_start_epoch else 1e-10
+        z_loss_weigth = 1e-8 if self.current_epoch >= self.router_start_epoch else 1e-10
 
         aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth)
         total_loss = class_loss + aux_loss
@@ -182,8 +182,8 @@ class EMADiffLitModule(pl.LightningModule):
         self.gradient_norm_router.append(total_norm_router ** 0.5)
         self.gradient_norm_backbone.append(total_norm_backbone ** 0.5)
 
-        torch.nn.utils.clip_grad_norm_(self.router_params, max_norm=0.1)
-        torch.nn.utils.clip_grad_norm_(self.backbone_params, max_norm=5.0)
+        torch.nn.utils.clip_grad_norm_(self.router_params, max_norm=0.5)
+        torch.nn.utils.clip_grad_norm_(self.backbone_params, max_norm=1.5)
 
     def on_train_epoch_start(self):
         self.accuracy_metrics['top1_train'].reset()
@@ -202,6 +202,16 @@ class EMADiffLitModule(pl.LightningModule):
             self._unfreeze_router()
             self.aux_loss_weight = self.alpha_scheduler()
             self.model.router.router_temp = self.temp_scheduler()
+            self.model.router.noise_std = self.noise_scheduler()
+
+            if e == self.router_start_epoch:
+                for group in self.optimizer.param_groups:
+                    for p in group['params']:
+                        state = self.optimizer.state[p]
+                        if 'exp_avg' in state:
+                            state['exp_avg'] = torch.zeros_like(p.data)
+                        if 'exp_avg_sq' in state:
+                            state['exp_avg_sq'] = torch.zeros_like(p.data) 
 
     #----- SCHEDULERS -----
     def temp_scheduler(self):
@@ -226,30 +236,50 @@ class EMADiffLitModule(pl.LightningModule):
         return self.temp_final
 
     def alpha_scheduler(self):
-        e = int(self.current_epoch)
-
-        a0 = float(self.alpha_init)
-        a1 = float(self.alpha_final)
-
+        e  = int(self.current_epoch)
         t0 = int(self.router_start_epoch)
         tw = int(self.router_warmup)
-        T  = int(self.alpha_epochs)
 
-        start = t0 + tw
+        a_peak  = float(self.alpha_init)
+        a_final = float(self.alpha_final)
+        T = int(self.alpha_epochs)
+        t1 = 90   
+        t2 = 120  
 
-        if e < start:
-            return a0
+        if e < t0:
+            return 0.0
 
-        end = start + T
-        if e < end:
-            progress = (e - start) / float(max(1, end - start))  # 0 -> 1
-            progress = min(max(progress, 0.0), 1.0)
+        # warmup: 0 -> a_peak
+        if e < t0 + tw:
+            pct = (e - t0 + 1) / float(max(1, tw))
+            return a_peak * pct
+        
+        if e < t1:
+            return a_peak
 
-            # "cosine_dec": 1 -> 0
-            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))
-            return a1 + (a0 - a1) * cosine_dec  # a0 -> a1
+        # decay: a_peak -> a_final
+        if e < t2:
+            progress   = (e - t1) / float(max(1, t2 - t1))
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
+            return 0.0 + (a_peak - 0.0) * cosine_dec   # a_peak -> 0
 
-        return a1
+        return a_final
+
+    def noise_scheduler(self):
+        epoch = self.current_epoch
+        rs = self.router_start_epoch
+        t1 = 90
+        t2 = 120
+
+        if epoch < rs:
+            return 0.0
+        if epoch < t1:
+            return 0.05   # Exploration
+        if epoch < t2:
+            # decay 0.02 -> 0
+            progress = (epoch - t1) / max(1, t2 - t1)
+            return 0.02 * (1.0 - progress)
+        return 0.0
     #----- SCHEDULERS -----
 
     def on_train_epoch_end(self):
@@ -304,7 +334,7 @@ class EMADiffLitModule(pl.LightningModule):
         logits, z_loss, imb_loss = self(data)
 
         class_loss = self.val_loss(logits, labels)
-        z_loss_weigth = 1e-4 if self.current_epoch >= self.router_start_epoch else 1e-10
+        z_loss_weigth = 1e-8 if self.current_epoch >= self.router_start_epoch else 1e-10
 
         aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth)
         total_loss = class_loss + aux_loss   
@@ -363,6 +393,7 @@ class EMADiffLitModule(pl.LightningModule):
         self.router_params = self.router_bias + self.router_w 
 
         base_lr = self.lr
+        router_mul = self.router_mul
         wd = self.weight_decay
 
         tot_epochs = self.train_epochs
@@ -371,8 +402,9 @@ class EMADiffLitModule(pl.LightningModule):
         router_warmup = self.router_warmup
 
         eta_min = 1e-3
-        eta_min_router = 1e-6
-        pre_router = 0.30
+        eta_min_router = 0.2
+        pre_router = 0.75
+        post_router  = 1.0
 
         def backbone_lr_lambda(epoch: int):
             e  = int(epoch)
@@ -380,6 +412,7 @@ class EMADiffLitModule(pl.LightningModule):
             rs = int(router_start_epoch)
             rw = int(router_warmup)
             T  = int(tot_epochs)
+            t1 = 90
 
             # 1) warmup: eta_min -> 1.0
             if e < wb:
@@ -387,22 +420,21 @@ class EMADiffLitModule(pl.LightningModule):
                 return eta_min + (1.0 - eta_min) * pct
 
             if e < rs:
-                span = max(1, rs - wb)
-                progress = (e - wb) / float(span)  # 0 -> 1
-                progress = min(max(progress, 0.0), 1.0)
+                progress = (e - wb) / float(rs - wb)  # 0 -> 1
                 cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
                 return pre_router + (1.0 - pre_router) * cosine_dec
 
             if e < rs + rw:
-                pct = (e - rs + 1) / float(max(1, rw))  # (0,1]
-                return pre_router + (1.0 - pre_router) * pct
+                pct = (e - rs + 1) / float(max(1, rw))
+                return pre_router + (post_router - pre_router) * pct
+            
+            if e < t1:
+                return post_router
 
             start = rs + rw
-            span = max(1, T - start)
-            progress = (e - start) / float(span)  # 0 -> 1
-            progress = min(max(progress, 0.0), 1.0)
+            progress = (e - t1) / float(max(1, T - t1))  # 0 -> 1
             cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-            return eta_min + (1.0 - eta_min) * cosine_dec
+            return eta_min + (post_router - eta_min) * cosine_dec
 
 
         def router_lr_lambda(epoch: int):
@@ -410,6 +442,8 @@ class EMADiffLitModule(pl.LightningModule):
             rs = int(router_start_epoch)
             rw = int(router_warmup)
             T  = int(tot_epochs)
+            t1 = 90
+            t2 = 120
 
             if e < rs:
                 return 0.0
@@ -418,22 +452,26 @@ class EMADiffLitModule(pl.LightningModule):
             if e < rs + rw:
                 pct = (e - rs + 1) / float(max(1, rw))  # (0,1]
                 return eta_min_router + (1.0 - eta_min_router) * pct
+            
+            if e < t1:
+                return 1.0
+            
 
             # cosine: 1.0 -> eta_min_router
-            start = rs + rw
-            span = max(1, T - start)
-            progress = (e - start) / float(span)
-            progress = min(max(progress, 0.0), 1.0)
-            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))
-            return eta_min_router + (1.0 - eta_min_router) * cosine_dec
+            if e < t2:
+                progress   = (e - t1) / float(max(1, t2 - t1))  # 0..1
+                cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
+                return 0.3 + (1.0 - 0.3) * cosine_dec  # 1 -> 0.3
+            
+            return 0.0
 
-        # Optimizer
+        # Optimizer 2e-5
         self.optimizer = AdamW(
             [
                 {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
-                {'params': self.router_w, 'lr': 2e-5, 'weight_decay': 0, 'name' : 'router_w'},
-                {'params' : self.router_bias, 'lr' : 2e-5, 'weight_decay': 0, 'name' : 'router_bias'}
-            ], betas=(0.9, 0.95)
+                {'params': self.router_w, 'lr': 5e-5, 'weight_decay': 0, 'name' : 'router_w'},
+                {'params' : self.router_bias, 'lr' : 5e-5, 'weight_decay': 0, 'name' : 'router_bias'}
+            ], betas=(0.9, 0.98)
         )
 
         self.lr_scheduler = LambdaLR(self.optimizer, lr_lambda=[
