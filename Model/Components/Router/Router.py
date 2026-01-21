@@ -15,11 +15,10 @@ class Router(nn.Module):
         self,
         num_experts,
         num_layers,
-        noise_epsilon = 1e-2,
+        eom_p,
         router_temp = 1.5,
         capacity_factor_train = 1.25,
         capacity_factor_eval = 1.50,
-        noise_std = 0.02,
         ):
         super().__init__()
         """
@@ -37,6 +36,7 @@ class Router(nn.Module):
         """
         self.num_experts = num_experts
         self.num_layers = num_layers
+        self.eom_p = eom_p
         
         self.capacity_factor_train = capacity_factor_train
         self.capacity_factor_eval = capacity_factor_eval
@@ -97,6 +97,7 @@ class Router(nn.Module):
             logits = logits + noise
         
         probs = F.softmax(logits.float(), dim = 1) # [N, num_experts]
+        div_loss = self.diverity_loss(probs)
 
         N, E = probs.shape
 
@@ -144,7 +145,15 @@ class Router(nn.Module):
         combine  = (w[:, :, None] * one_hot_pos).to(X.dtype)                   # [N, E, Ccap]
         dispatch = (mask[:, :, None].bool() & one_hot_pos.bool())   
 
-        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach()
+        if self.training and self.eom_p > 0:
+            N, E, Ccap = combine.shape
+
+            # Mask on (N, E)
+            drop_mask = (torch.rand(N, E, device= combine.device) > self.eom_p).float()
+            drop_mask = drop_mask.unsqueeze(-1) # Shape [N, E, 1]
+            combine = combine * drop_mask # Reset gating for some (token, experts)
+
+        return dispatch, combine, z_loss, aux_loss, div_loss, logits_std, logits.detach()
 
     def _uniform_routing(self, X, logits, logits_std):
         """
@@ -191,9 +200,9 @@ class Router(nn.Module):
         
         aux_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         z_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
-        # div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
+        div_loss = torch.tensor(0.0, device=X.device, dtype=X.dtype)
         
-        return dispatch, combine, z_loss, aux_loss, logits_std, logits.detach()
+        return dispatch, combine, z_loss, aux_loss, div_loss, logits_std, logits.detach()
 
     def z_loss(self, logits):
         """
@@ -222,7 +231,7 @@ class Router(nn.Module):
 
         return lb_loss
     
-    def diverity_loss(self, logits):
+    def diverity_loss(self, probs):
         """
         Encourage different experts to have different activation patterns.
 
@@ -230,12 +239,12 @@ class Router(nn.Module):
             logits (torch.Tensor): Router logits [N, num_experts].
         """
 
-        # Compute expert correlation
-        E = logits.shape[-1]
-        logits_norm = F.normalize(logits, dim = 0, p = 2)
-        correlation = torch.mm(logits_norm.t(), logits_norm) # [E, E]
-
-        # Penalize high correlation between experts
-        identity = torch.eye(E, device = logits.device)
+        # Probs : [N, E]
+        E = probs.shape[-1]
+        if E <= 1:
+            return probs.new_tensor(0.0)
         
-        
+        probs_norm = F.normalize(probs, dim = 0, p = 2) # Shape : [N, E]
+        corr = probs_norm.t() @ probs_norm # Shape [E, E]
+        I = torch.eye(E, device=probs.device, dtype=probs.dtype)
+        return ((corr - I) ** 2).mean()

@@ -20,11 +20,14 @@ class PCENetwork(nn.Module):
                     num_experts,
                     layer_number,
                     patch_size,
-                    dropout,
+                    dropout_exp,
+                    dropout_head,
+                    drop_path,
                     num_classes,
                     router_temp,
                     capacity_factor_train,
                     capacity_factor_val,
+                    eom_p,
                  ):
         super().__init__()
 
@@ -50,11 +53,11 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        self.drop_path = DropPath(0.1)
+        self.drop_path = DropPath(drop_path)
         
         last_channel = self.create_layers(
             num_experts=num_experts,
-            dropout=dropout,
+            dropout=dropout_exp,
             layer_number=layer_number,
         )        
 
@@ -64,13 +67,14 @@ class PCENetwork(nn.Module):
             router_temp = router_temp,
             capacity_factor_train=capacity_factor_train,
             capacity_factor_eval=capacity_factor_val,
+            eom_p = eom_p,
         )
 
         self.pooler = nn.AdaptiveAvgPool2d(1)
         self.flatten = nn.Flatten()
         self.prediction_head = nn.Sequential(
             nn.LayerNorm(last_channel),
-            nn.Dropout(0.1),
+            nn.Dropout(dropout_head),
             nn.Linear(last_channel, num_classes),
             # nn.GELU(),
             # nn.Dropout(0.05),
@@ -169,6 +173,7 @@ class PCENetwork(nn.Module):
         """
         tot_z_loss = 0.0
         tot_imb_loss = 0.0
+        tot_div_loss = 0.0
 
         img_device = X.device
         B = X.shape[0]
@@ -197,19 +202,19 @@ class PCENetwork(nn.Module):
 
                     X_tokens = X_patches.reshape(B * P, C, H, W)
 
-                    positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device)
-                    positional_features = positional_features.flatten(0, 1)
-
-                    # tokens enriched with positional features 
-                    X_positional = torch.cat([X_tokens, positional_features], dim = 1)
+                    
                 else:
                     X_tokens = X # Shape : [N, C, H, W]
                 
                 # Get positional features from fourier
-                
+                positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device)
+                positional_features = positional_features.flatten(0, 1)
+
+                # tokens enriched with positional features 
+                X_positional = torch.cat([X_tokens, positional_features], dim = 1)
                 
                 # Route patches to experts and compute auxiliary losses
-                dispatch, combine, z_loss, imb_loss, logits_std, logits = self.router(
+                dispatch, combine, z_loss, imb_loss, div_loss, logits_std, logits = self.router(
                     X_positional, 
                     layer.router_gate, 
                     current_epoch,
@@ -279,13 +284,14 @@ class PCENetwork(nn.Module):
                 X = merge_gn(X)
                 tot_z_loss += z_loss
                 tot_imb_loss += imb_loss
+                tot_div_loss += div_loss
 
         # Apply global pooling and prediction head
         x = self.pooler(X) 
         x = self.flatten(x) 
         logits = self.prediction_head(x) 
         
-        return logits, tot_z_loss, tot_imb_loss
+        return logits, tot_z_loss, tot_imb_loss, tot_div_loss
 
 
     def _indices_from_dispatch(self, dispatch):

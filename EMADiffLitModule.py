@@ -6,6 +6,7 @@ from torch.mps import current_allocated_memory
 from torch.nn.utils.spectral_norm import SpectralNormLoadStateDictPreHook
 import wandb as wb
 import math
+import random
 
 from torch.nn import functional as F
 from torch.optim import AdamW, Adam
@@ -100,6 +101,11 @@ class EMADiffLitModule(pl.LightningModule):
 
         self.aux_loss_weight = 0.0
 
+        self.use_mixup_cutmix = True
+        self.mixup_alpha      = 0.2   
+        self.cutmix_alpha     = 0.5
+        self.cutmix_prob      = 0.3
+
         # Accuracy metrics
         self.accuracy_metrics = {
             'top1_train' : Accuracy(task='multiclass', num_classes=num_classes, top_k=1).to(device),
@@ -139,12 +145,31 @@ class EMADiffLitModule(pl.LightningModule):
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
 
-        logits, z_loss, imb_loss = self(data)
+        if self.use_mixup_cutmix:
+            r = random.random()
+            if r < self.cutmix_prob:
+                # CutMix
+                data, targets_a, targets_b, lam = self._cutmix_batch(data, labels)
+            else:
+                # Mixup
+                data, targets_a, targets_b, lam = self._mixup_batch(data, labels)
 
-        class_loss = self.train_loss(logits, labels)
-        z_loss_weigth = 1e-8 if self.current_epoch >= self.router_start_epoch else 1e-10
+            logits, z_loss, imb_loss, div_loss = self(data)
 
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth)
+            # Loss = lam * CE(logits, y_a) + (1-lam) * CE(logits, y_b)
+            class_loss = (
+                lam * self.train_loss(logits, targets_a)
+                + (1.0 - lam) * self.train_loss(logits, targets_b)
+            )
+
+        else:
+            logits, z_loss, imb_loss, div_loss = self(data)
+            class_loss = self.train_loss(logits, labels)
+        
+        z_loss_weigth = 1e-3 if self.current_epoch >= self.router_start_epoch else 0
+        div_loss_w = 1e-3
+
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth) + (div_loss_w * div_loss) 
         total_loss = class_loss + aux_loss
 
         self.train_class_losses.append(class_loss.item())
@@ -204,82 +229,78 @@ class EMADiffLitModule(pl.LightningModule):
             self.model.router.router_temp = self.temp_scheduler()
             self.model.router.noise_std = self.noise_scheduler()
 
-            if e == self.router_start_epoch:
-                for group in self.optimizer.param_groups:
-                    for p in group['params']:
-                        state = self.optimizer.state[p]
-                        if 'exp_avg' in state:
-                            state['exp_avg'] = torch.zeros_like(p.data)
-                        if 'exp_avg_sq' in state:
-                            state['exp_avg_sq'] = torch.zeros_like(p.data) 
-
     #----- SCHEDULERS -----
     def temp_scheduler(self):
-        t0 = self.router_start_epoch
-        tw = self.router_warmup
-
-        tdec = max(self.temp_epochs, t0  + tw + 1)
-
-        e = self.current_epoch
-
-        # During warmup and uniform phases
-        if e < t0 or e < t0 + tw:
-            return self.temp_init
-        
-        # Cosine decay
-        if e < tdec:
-            progress = (self.current_epoch - (t0 + tw)) / float(max(1, tdec - (t0 + tw)))
-            progress = min(max(progress, 0.0), 1.0)
-            cosine_inc = 0.5 * (1.0 - math.cos(math.pi * progress))
-            return self.temp_init + (self.temp_final - self.temp_init) * cosine_inc
-        
-        return self.temp_final
-
-    def alpha_scheduler(self):
         e  = int(self.current_epoch)
         t0 = int(self.router_start_epoch)
         tw = int(self.router_warmup)
+        T  = int(self.train_epochs)
+
+        t_start = t0 + tw
+        t_end   = min(t_start + int(self.temp_epochs), T)
+
+        if e < t_start:
+            return float(self.temp_init)
+
+        if e < t_end:
+            progress   = (e - t_start) / float(max(1, t_end - t_start))
+            progress   = min(max(progress, 0.0), 1.0)
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
+            return float(self.temp_final) + (float(self.temp_init) - float(self.temp_final)) * cosine_dec
+
+        return float(self.temp_final)
+
+    def alpha_scheduler(self):
+        e  = int(self.current_epoch)
+        rs = int(self.router_start_epoch)
+        rw = int(self.router_warmup)
+        T  = int(self.train_epochs)
 
         a_peak  = float(self.alpha_init)
         a_final = float(self.alpha_final)
-        T = int(self.alpha_epochs)
-        t1 = 90   
-        t2 = 120  
 
-        if e < t0:
+        # Router non attivo: nessuna aux loss
+        if e < rs:
             return 0.0
 
-        # warmup: 0 -> a_peak
-        if e < t0 + tw:
-            pct = (e - t0 + 1) / float(max(1, tw))
+        # Warmup: 0 -> a_peak
+        if e < rs + rw:
+            pct = (e - rs + 1) / float(max(1, rw))
             return a_peak * pct
-        
-        if e < t1:
+
+        # Plateau a a_peak finché il router esplora a LR pieno
+        t1_alpha = rs + int(0.4 * (T - rs))  # ~40% della parte post-router
+        if e < t1_alpha:
             return a_peak
 
-        # decay: a_peak -> a_final
-        if e < t2:
-            progress   = (e - t1) / float(max(1, t2 - t1))
-            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-            return 0.0 + (a_peak - 0.0) * cosine_dec   # a_peak -> 0
-
-        return a_final
+        # Decadimento coseno a_peak -> a_final da t1_alpha a T
+        progress   = (e - t1_alpha) / float(max(1, T - t1_alpha))
+        progress   = min(max(progress, 0.0), 1.0)
+        cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
+        return a_final + (a_peak - a_final) * cosine_dec
 
     def noise_scheduler(self):
-        epoch = self.current_epoch
-        rs = self.router_start_epoch
-        t1 = 90
-        t2 = 120
+        epoch = int(self.current_epoch)
+        rs    = int(self.router_start_epoch)
+        T     = int(self.train_epochs)
 
+        noise_max = 0.05
+        noise_min = 0.03
+
+        # Prima che il router sia attivo: niente rumore
         if epoch < rs:
             return 0.0
-        if epoch < t1:
-            return 0.05   # Exploration
-        if epoch < t2:
-            # decay 0.02 -> 0
-            progress = (epoch - t1) / max(1, t2 - t1)
-            return 0.02 * (1.0 - progress)
-        return 0.0
+
+        # Plateau di esplorazione ad alto rumore
+        t1_noise = rs + int(0.3 * (T - rs))  # ~30% della parte post-router
+        if epoch < t1_noise:
+            return noise_max
+
+        # Decadimento coseno noise_max -> noise_min
+        progress   = (epoch - t1_noise) / float(max(1, T - t1_noise))
+        progress   = min(max(progress, 0.0), 1.0)
+        cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
+        return noise_min + (noise_max - noise_min) * cosine_dec
     #----- SCHEDULERS -----
 
     def on_train_epoch_end(self):
@@ -331,12 +352,14 @@ class EMADiffLitModule(pl.LightningModule):
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
         
-        logits, z_loss, imb_loss = self(data)
+        logits, z_loss, imb_loss, div_loss = self(data)
 
         class_loss = self.val_loss(logits, labels)
-        z_loss_weigth = 1e-8 if self.current_epoch >= self.router_start_epoch else 1e-10
 
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth)
+        z_loss_weigth = 1e-3 if self.current_epoch >= self.router_start_epoch else 1e-10
+        div_loss_w = 1e-3
+
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth) + (div_loss_w * div_loss) 
         total_loss = class_loss + aux_loss   
 
         self.val_class_losses.append(class_loss.item())
@@ -396,81 +419,73 @@ class EMADiffLitModule(pl.LightningModule):
         router_mul = self.router_mul
         wd = self.weight_decay
 
-        tot_epochs = self.train_epochs
-        warmup_backbone = self.warmup_backbone
+        tot_epochs       = self.train_epochs
+        warmup_backbone  = self.warmup_backbone
         router_start_epoch = self.router_start_epoch
-        router_warmup = self.router_warmup
+        router_warmup    = self.router_warmup
 
-        eta_min = 1e-3
-        eta_min_router = 0.2
-        pre_router = 0.75
-        post_router  = 1.0
+        eta_min         = 1e-3      
+        eta_min_router  = 0.10
+        router_min_factor = 0.30 
 
         def backbone_lr_lambda(epoch: int):
             e  = int(epoch)
             wb = int(warmup_backbone)
             rs = int(router_start_epoch)
-            rw = int(router_warmup)
             T  = int(tot_epochs)
-            t1 = 90
 
-            # 1) warmup: eta_min -> 1.0
+            # Pivot: inizio del cosine decay del backbone
+            t1_backbone = rs + int(0.2 * (T - rs))  # ~20% della parte post-router
+
+            # 1) Warmup: eta_min -> 1.0
             if e < wb:
                 pct = (e + 1) / float(max(1, wb))  # (0,1]
                 return eta_min + (1.0 - eta_min) * pct
 
-            if e < rs:
-                progress = (e - wb) / float(rs - wb)  # 0 -> 1
-                cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-                return pre_router + (1.0 - pre_router) * cosine_dec
+            # 2) Plateau LR pieno fino a t1_backbone
+            if e < t1_backbone:
+                return 1.0
 
-            if e < rs + rw:
-                pct = (e - rs + 1) / float(max(1, rw))
-                return pre_router + (post_router - pre_router) * pct
-            
-            if e < t1:
-                return post_router
-
-            start = rs + rw
-            progress = (e - t1) / float(max(1, T - t1))  # 0 -> 1
+            # 3) Cosine decay 1.0 -> eta_min da t1_backbone a T
+            progress   = (e - t1_backbone) / float(max(1, T - t1_backbone))
+            progress   = min(max(progress, 0.0), 1.0)
             cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-            return eta_min + (post_router - eta_min) * cosine_dec
-
+            return eta_min + (1.0 - eta_min) * cosine_dec
 
         def router_lr_lambda(epoch: int):
             e  = int(epoch)
             rs = int(router_start_epoch)
             rw = int(router_warmup)
             T  = int(tot_epochs)
-            t1 = 90
-            t2 = 120
 
+            # Pivot per il router: plateau un po' più lungo del backbone
+            t1_router = rs + int(0.35 * (T - rs))  # ~35% della parte post-router
+
+            # Router spento prima di router_start_epoch
             if e < rs:
                 return 0.0
 
-            # linear warmup: eta_min_router -> 1.0
+            # Warmup router: eta_min_router -> 1.0
             if e < rs + rw:
                 pct = (e - rs + 1) / float(max(1, rw))  # (0,1]
                 return eta_min_router + (1.0 - eta_min_router) * pct
-            
-            if e < t1:
-                return 1.0
-            
 
-            # cosine: 1.0 -> eta_min_router
-            if e < t2:
-                progress   = (e - t1) / float(max(1, t2 - t1))  # 0..1
-                cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-                return 0.3 + (1.0 - 0.3) * cosine_dec  # 1 -> 0.3
-            
-            return 0.0
+            # Plateau LR pieno
+            if e < t1_router:
+                return 1.0
+
+            # Cosine decay 1.0 -> router_min_factor da t1_router a T
+            progress   = (e - t1_router) / float(max(1, T - t1_router))  # 0..1
+            progress   = min(max(progress, 0.0), 1.0)
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))      # 1 -> 0
+            return router_min_factor + (1.0 - router_min_factor) * cosine_dec
 
         # Optimizer 2e-5
         self.optimizer = AdamW(
             [
                 {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
-                {'params': self.router_w, 'lr': 5e-5, 'weight_decay': 0, 'name' : 'router_w'},
-                {'params' : self.router_bias, 'lr' : 5e-5, 'weight_decay': 0, 'name' : 'router_bias'}
+                {'params': self.router_w, 'lr': 2e-5, 'weight_decay': 0, 'name' : 'router_w'},
+                {'params' : self.router_bias, 'lr' : 2e-5, 'weight_decay': 0, 'name' : 'router_bias'}
             ], betas=(0.9, 0.98)
         )
 
@@ -499,3 +514,73 @@ class EMADiffLitModule(pl.LightningModule):
         
         for p in self.model.router.parameters():
             p.requires_grad_(True)
+
+    # MIXUP - CutMix utils
+    def _sample_lambda(self, alpha) : 
+        """
+        Sample lambda from beta
+        """
+        if alpha <= 0:
+            return 1.0
+        
+        beta_dist = torch.distributions.Beta(alpha, alpha)
+        lam = beta_dist.sample().item()
+        return float(lam)
+    
+    def _mixup_batch(self, x, y):
+        """
+        applly Mixup on batch
+        """
+        if self.mixup_alpha <= 0:
+            return x,y,y,1.0
+        
+        lam = self._sample_lambda(self.mixup_alpha)
+        batch_size = x.size(0)
+        index = torch.randperm(batch_size, device=x.device)
+
+        mixed_x = lam * x + (1.0 - lam) * x[index, :]
+        y_a, y_b = y, y[index]
+        return mixed_x, y_a, y_b, lam
+    
+    def _rand_box(self, size, lam):
+        """
+        Compute a random box for CutMix
+        size : (B, C, H, W)
+        """
+
+        B, C, H, W = size
+        cut_rat = math.sqrt(1.0 - lam)
+        cut_w = int(W * cut_rat)
+        cut_h = int(H * cut_rat)
+
+        # Center of box
+        cx = torch.randint(W, (1,), device=self.device).item()
+        cy = torch.randint(H, (1,), device=self.device).item()
+
+        bbx1 = max(cx - cut_w // 2, 0)
+        bby1 = max(cy - cut_h // 2, 0)
+        bbx2 = min(cx + cut_w // 2, W)
+        bby2 = min(cy + cut_h // 2, H)
+
+        return bbx1, bby1, bbx2, bby2
+    
+    def _cutmix_batch(self, x, y):
+        """
+        Apply cutmix on batch
+        """
+        if self.cutmix_alpha <= 0.0:
+            return x, y, y, 1.0
+
+        lam = self._sample_lambda(self.cutmix_alpha)
+        batch_size = x.size(0)
+        index = torch.randperm(batch_size, device=x.device)
+
+        y_a, y_b = y, y[index]
+        bbx1, bby1, bbx2, bby2 = self._rand_box(x.size(), lam)
+
+        x[:, :, bby1:bby2, bbx1:bbx2] = x[index, :, bby1:bby2, bbx1:bbx2]
+
+        cut_area = (bbx2 - bbx1) * (bby2 - bby1)
+        lam = 1.0 - cut_area / float(x.size(2) * x.size(3))
+
+        return x, y_a, y_b, lam

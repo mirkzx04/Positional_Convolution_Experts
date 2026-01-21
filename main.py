@@ -140,25 +140,28 @@ if __name__ == "__main__":
     print('\n ------------------------ \n')
 
     # Hyperparameters of model
-    num_exp = 10
+    num_exp = 6
     layer_number = 8
     patch_size = 16
     lr = 4e-4
-    dropout = 0.15
+    dropout_exp = 0.15
+    dropout_head = 0.1
+    drop_path = 0.1
+    eom_p = 0.2
     weight_decay = 4e-4
 
     # Hyperparameters of router
     capacity_factor_train = 2.0
     capacity_factor_val = 2.0
 
-    alpha_init = 3e-3
-    alpha_final = 5e-5
-    alpha_epochs =  80
+    alpha_init = 1e-2
+    alpha_final = 5e-4
+    alpha_epochs =  150
 
     temp_init = 2.0
     temp_mid = 1.2
     temp_final = 0.70
-    temp_epochs = 140
+    temp_epochs = 150
 
     # Training metrics
     train_epochs = 250
@@ -166,7 +169,7 @@ if __name__ == "__main__":
     batch_size = 128
 
     print("\n--- Hyperparameters ---")
-    print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, dropout={dropout}, wd={weight_decay}")
+    print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, wd={weight_decay}")
     print(f"Training: epochs={train_epochs}, batch={batch_size}\n")
     print('\n ------------------------ \n')
 
@@ -183,7 +186,7 @@ if __name__ == "__main__":
     logger = WandbLogger(
         project="PCE",
         log_model = True,
-        name = 'Test-CIFAR-100-15',
+        name = 'Test-CIFAR-100-Mixup/CutMix',
     )
     logger.experiment.define_metric("epoch")
     logger.experiment.define_metric("*", step_metric="epoch")
@@ -199,11 +202,14 @@ if __name__ == "__main__":
         num_experts = num_exp,
         layer_number = layer_number,
         patch_size = patch_size,
-        dropout=dropout,
+        dropout_exp = dropout_exp,
+        dropout_head = dropout_head,
+        drop_path = drop_path,
         num_classes=num_classes,
         router_temp=temp_init,
         capacity_factor_train = capacity_factor_train,
         capacity_factor_val = capacity_factor_val,
+        eom_p = eom_p
         )
     # pce = torch.compile(pce, mode="reduce-overhead")
 
