@@ -3,12 +3,15 @@ import tarfile
 import urllib.request
 import numpy as np 
 import matplotlib.pyplot as plt
+import itertools
 
 import torch
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import gc
 gc.collect()
 torch.cuda.empty_cache()
+
+from tqdm import tqdm
 
 from torch.utils.data import DataLoader
 
@@ -66,7 +69,7 @@ def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py'):
     }
 
 
-def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-200'):
+def get_tinyimagenet_sets(batch_size, tinyimagenet_path = 'Data/tiny-imagenet-200'):
     """
     Initialize the Tiny-ImageNet dataset and create Dataloaders for training and validation
 
@@ -78,8 +81,8 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
     tiny_image_net_train_set = TinyImageNetTrainDataset(tiny_image_net)
     tiny_image_net_val_set = TinyImageNetValidationDataset(tiny_image_net)
 
-    tiny_image_net_train_dataloader = DataLoader(dataset=tiny_image_net_train_set, batch_size=batch_size, shuffle=True, num_workers=23)
-    tiny_image_net_val_dataloader = DataLoader(dataset=tiny_image_net_val_set, batch_size=batch_size, shuffle=False, num_workers=23)
+    tiny_image_net_train_dataloader = DataLoader(dataset=tiny_image_net_train_set, batch_size=batch_size, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True)
+    tiny_image_net_val_dataloader = DataLoader(dataset=tiny_image_net_val_set, batch_size=batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True)
 
     # Get numer of classes in labels
     all_labeles = np.concatenate([tiny_image_net_train_set.labels, tiny_image_net_val_set.labels])
@@ -91,7 +94,7 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = '.Data/tiny-imagenet-2
             'train' : tiny_image_net_train_set,
             'val': tiny_image_net_val_set
         },
-        'dataloader' : {
+        'dataloaders' : {
             'train' : tiny_image_net_train_dataloader,
             'val' : tiny_image_net_val_dataloader
         },
@@ -139,32 +142,41 @@ if __name__ == "__main__":
     print(f'-- Start with device : {device} ---')
     print('\n ------------------------ \n')
 
+    param_grid = {
+        'lr': [1.0e-4, 1.5e-4],
+        'weight_decay': [0.003, 0.005],
+        'drop_path': [0.10, 0.20]
+    }
+    keys, values = zip(*param_grid.items())
+    combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
+
     # Hyperparameters of model
-    num_exp = 6
+    num_exp = 16
     layer_number = 8
     patch_size = 16
-    lr = 4e-4
+    lr = 2e-4
+    router_lr = 2 * lr
     dropout_exp = 0.15
-    dropout_head = 0.1
-    drop_path = 0.1
-    eom_p = 0.2
-    weight_decay = 4e-4
+    dropout_head = 0.10
+    drop_path = 0.2
+    eom_p = 0.15
+    weight_decay = 0.003
 
     # Hyperparameters of router
     capacity_factor_train = 2.0
-    capacity_factor_val = 2.0
+    capacity_factor_val = 2.25
 
     alpha_init = 1e-2
-    alpha_final = 5e-4
-    alpha_epochs =  150
+    alpha_final = 2e-4
+    alpha_epochs =  200
 
     temp_init = 2.0
     temp_mid = 1.2
-    temp_final = 0.70
-    temp_epochs = 150
+    temp_final = 0.80
+    temp_epochs = 200
 
     # Training metrics
-    train_epochs = 250
+    train_epochs = 150
     uniform_epochs = 30
     batch_size = 128
 
@@ -174,63 +186,85 @@ if __name__ == "__main__":
     print('\n ------------------------ \n')
 
     # cifar10_sets = get_cifar10_sets(batch_size)
-    cifar100_sets = get_cifar100_sets(batch_size)
-    train_loader = cifar100_sets['dataloaders']['train']
-    val_loader = cifar100_sets['dataloaders']['val']
-    num_classes = cifar100_sets['num_classes']
+    # cifar100_sets = get_cifar100_sets(batch_size)
+
+    tiny_set = get_tinyimagenet_sets(batch_size)
+    train_loader = tiny_set['dataloaders']['train']
+    val_loader = tiny_set['dataloaders']['val']
+    num_classes = tiny_set['num_classes']
+
 
     print(f'Num classes : {num_classes}')
 
     print(f'--- Dataset loaded --- \n')
-    # Defines checkpointer and Logger
-    logger = WandbLogger(
-        project="PCE",
-        log_model = True,
-        name = 'Test-CIFAR-100-Mixup/CutMix',
-    )
-    logger.experiment.define_metric("epoch")
-    logger.experiment.define_metric("*", step_metric="epoch")
 
-    checkpoint_callback = ModelCheckpoint(
-        save_top_k=0,
-        save_last=True,
-        filename = 'best-model',
-        dirpath = 'checkpoints/',
-        save_weights_only = False,
-    )
-    pce = PCENetwork(
-        num_experts = num_exp,
-        layer_number = layer_number,
-        patch_size = patch_size,
-        dropout_exp = dropout_exp,
-        dropout_head = dropout_head,
-        drop_path = drop_path,
-        num_classes=num_classes,
-        router_temp=temp_init,
-        capacity_factor_train = capacity_factor_train,
-        capacity_factor_val = capacity_factor_val,
-        eom_p = eom_p
+    for i, params in tqdm(enumerate(combinations)):
+        lr = params['lr']
+        weight_decay = params['weight_decay']
+        drop_path = params['drop_path']
+
+        if (lr == 0.0002 and weight_decay == 0.003 and drop_path == 0.1) or (lr == 0.0002 and weight_decay == 0.003 and drop_path == 0.2):
+            continue
+
+        lr_router = 2 * lr
+
+        run_name = f"PCE-lr: {lr}-wd: {weight_decay}-dp: {drop_path}"
+
+        # Defines checkpointer and Logger
+        logger = WandbLogger(
+            project="PCE",
+            log_model = False,
+            name = f'Test-Tiny-{run_name}',
         )
-    # pce = torch.compile(pce, mode="reduce-overhead")
+        logger.experiment.define_metric("epoch")
+        logger.experiment.define_metric("*", step_metric="epoch")
 
-    lit_module = EMADiffLitModule(
-        pce=pce, lr=lr, weight_decay=weight_decay, device=device, train_epochs=train_epochs, 
-        uniform_epochs=uniform_epochs, alpha_init=alpha_init,  alpha_final=alpha_final, 
-        alpha_epochs=alpha_epochs, temp_init=temp_init, temp_mid = temp_mid, 
-        temp_final=temp_final,temp_epochs=temp_epochs, num_classes=num_classes
-    )
-    trainer = pl.Trainer(
-        max_epochs=train_epochs,
-        logger = logger,
-        precision='32',
-        accelerator=device,
-        enable_checkpointing= True,
-        callbacks=[checkpoint_callback],
-        num_sanity_val_steps=0,
-    )
+        # checkpoint_callback = ModelCheckpoint(
+        #     save_top_k=0,
+        #     save_last=True,
+        #     filename = 'best-model',
+        #     dirpath = 'checkpoints/',
+        #     save_weights_only = False,
+        # )
+        pce = PCENetwork(
+            num_experts = num_exp,
+            layer_number = layer_number,
+            patch_size = patch_size,
+            dropout_exp = dropout_exp,
+            dropout_head = dropout_head,
+            drop_path = drop_path,
+            num_classes=num_classes,
+            router_temp=temp_init,
+            capacity_factor_train = capacity_factor_train,
+            capacity_factor_val = capacity_factor_val,
+            eom_p = eom_p
+            )
+        # pce = torch.compile(pce, mode="reduce-overhead")
 
-    print(f'--- Start training --- \n')
-    if os.path.exists('checkpoints/last.ckpt'):
-        trainer.fit(lit_module, train_loader, val_loader, ckpt_path='checkpoints/last.ckpt')
-    else:
-        trainer.fit(lit_module, train_loader, val_loader)
+        lit_module = EMADiffLitModule(
+            pce=pce, lr=lr, weight_decay=weight_decay, device=device, train_epochs=train_epochs, 
+            uniform_epochs=uniform_epochs, alpha_init=alpha_init,  alpha_final=alpha_final, 
+            alpha_epochs=alpha_epochs, temp_init=temp_init, temp_mid = temp_mid, 
+            temp_final=temp_final,temp_epochs=temp_epochs, num_classes=num_classes, router_lr = router_lr
+        )
+        trainer = pl.Trainer(
+            max_epochs=train_epochs,
+            logger = logger,
+            precision='32',
+            accelerator=device,
+            enable_checkpointing= False,
+            # callbacks=[checkpoint_callback],
+            num_sanity_val_steps=0,
+        )
+
+        print(f'--- Start training --- \n')
+        if os.path.exists('checkpoints/last.ckpt'):
+            trainer.fit(lit_module, train_loader, val_loader, ckpt_path='checkpoints/last.ckpt')
+        else:
+            trainer.fit(lit_module, train_loader, val_loader)
+
+        logger.experiment.finish()
+
+        del pce, lit_module, trainer, logger
+        torch.cuda.empty_cache()
+        gc.collect()       

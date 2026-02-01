@@ -24,6 +24,7 @@ class EMADiffLitModule(pl.LightningModule):
                 self, 
                 pce,
                 lr, 
+                router_lr,
                 weight_decay,
                 num_classes,
                 device,
@@ -61,6 +62,7 @@ class EMADiffLitModule(pl.LightningModule):
         # Model and optimizer parameters
         self.model = pce
         self.lr = lr
+        self.router_lr = router_lr
         self.weight_decay = weight_decay
 
         # Router hyperparameters for scheduling
@@ -101,10 +103,13 @@ class EMADiffLitModule(pl.LightningModule):
 
         self.aux_loss_weight = 0.0
 
-        self.use_mixup_cutmix = True
+        self.use_mixup_cutmix = False
         self.mixup_alpha      = 0.2   
         self.cutmix_alpha     = 0.5
         self.cutmix_prob      = 0.3
+
+        self.z_loss_weigth = 1e-3 if self.current_epoch >= self.router_start_epoch else 0
+        self.div_loss_weight = 0
 
         # Accuracy metrics
         self.accuracy_metrics = {
@@ -166,10 +171,7 @@ class EMADiffLitModule(pl.LightningModule):
             logits, z_loss, imb_loss, div_loss = self(data)
             class_loss = self.train_loss(logits, labels)
         
-        z_loss_weigth = 1e-3 if self.current_epoch >= self.router_start_epoch else 0
-        div_loss_w = 1e-3
-
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth) + (div_loss_w * div_loss) 
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * self.z_loss_weigth) + (self.div_loss_weight * div_loss) 
         total_loss = class_loss + aux_loss
 
         self.train_class_losses.append(class_loss.item())
@@ -319,7 +321,7 @@ class EMADiffLitModule(pl.LightningModule):
             'training/train_top1' : self.accuracy_metrics['top1_train'].compute().item() * 100,
             'training/train_top5' : self.accuracy_metrics['top5_train'].compute().item() * 100,
             'LR_backbone : ' : self.optimizer.param_groups[0]['lr'],
-            'LR_Router' : self.optimizer.param_groups[1]['lr'],
+            'LR_Router' : self.optimizer.param_groups[2]['lr'],
             'Gradient norm backbone' : torch.tensor(self.gradient_norm_backbone).mean().item(),
             'Gradient norm router' : torch.tensor(self.gradient_norm_router).mean().item(),
             'alpha_loss' : torch.tensor(self.aux_loss_weight),
@@ -356,10 +358,7 @@ class EMADiffLitModule(pl.LightningModule):
 
         class_loss = self.val_loss(logits, labels)
 
-        z_loss_weigth = 1e-3 if self.current_epoch >= self.router_start_epoch else 1e-10
-        div_loss_w = 1e-3
-
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * z_loss_weigth) + (div_loss_w * div_loss) 
+        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * self.z_loss_weigth) + (self.div_loss_weight * div_loss) 
         total_loss = class_loss + aux_loss   
 
         self.val_class_losses.append(class_loss.item())
@@ -406,92 +405,77 @@ class EMADiffLitModule(pl.LightningModule):
         self.log_dict(log_dict, prog_bar=True, logger=True, on_step=False, on_epoch=True)
 
     def configure_optimizers(self):
-        self.router_w, self.router_bias, self.backbone_params = [], [], []
-        for name, p in self.model.named_parameters():
-            if 'router_gate' in name or 'router' in name or 'gate' in name:
-                (self.router_bias if p.dim()==1 else self.router_w).append(p)
-            else:
-                self.backbone_params.append(p)
 
-        self.router_params = self.router_bias + self.router_w 
+        backbone_params, backbone_norm = [], []
+        router_params = []
+
+        for n, p in self.model.named_parameters():
+            is_router = ('router_gate' in n) or ('router' in n) or ('gate' in n)
+
+            if  n.endswith('.bias') or 'norm' in n.lower() or 'bn' in n.lower():
+                if is_router:
+                    router_params.append(p)
+                else:
+                    backbone_norm.append(p)
+            else:
+                if is_router : 
+                    router_params.append(p)
+                else:
+                    backbone_params.append(p)
+
+        self.backbone_params = backbone_params + backbone_norm
+        self.router_params = router_params 
 
         base_lr = self.lr
-        router_mul = self.router_mul
+        router_lr = self.router_lr
         wd = self.weight_decay
 
-        tot_epochs       = self.train_epochs
-        warmup_backbone  = self.warmup_backbone
-        router_start_epoch = self.router_start_epoch
-        router_warmup    = self.router_warmup
+        T = self.train_epochs
+        warmup_backbone = self.warmup_backbone
 
-        eta_min         = 1e-3      
-        eta_min_router  = 0.10
-        router_min_factor = 0.30 
+        router_start_epoch = self.router_start_epoch
+        warmup_router = self.router_warmup
 
         def backbone_lr_lambda(epoch: int):
-            e  = int(epoch)
-            wb = int(warmup_backbone)
-            rs = int(router_start_epoch)
-            T  = int(tot_epochs)
-
-            # Pivot: inizio del cosine decay del backbone
-            t1_backbone = rs + int(0.2 * (T - rs))  # ~20% della parte post-router
-
-            # 1) Warmup: eta_min -> 1.0
-            if e < wb:
-                pct = (e + 1) / float(max(1, wb))  # (0,1]
-                return eta_min + (1.0 - eta_min) * pct
-
-            # 2) Plateau LR pieno fino a t1_backbone
-            if e < t1_backbone:
-                return 1.0
-
-            # 3) Cosine decay 1.0 -> eta_min da t1_backbone a T
-            progress   = (e - t1_backbone) / float(max(1, T - t1_backbone))
-            progress   = min(max(progress, 0.0), 1.0)
-            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-            return eta_min + (1.0 - eta_min) * cosine_dec
+            e = int(epoch)
+            if  e < warmup_backbone:
+            # warmup 0 -> 1
+                return (e + 1) / float(max(1, warmup_backbone))
+            
+            # cosine decay da warmup_epochs a T
+            progress = (e - warmup_backbone) / float(max(1, T - warmup_backbone))
+            progress = min(max(progress, 0.0), 1.0)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
 
         def router_lr_lambda(epoch: int):
-            e  = int(epoch)
-            rs = int(router_start_epoch)
-            rw = int(router_warmup)
-            T  = int(tot_epochs)
-
-            # Pivot per il router: plateau un po' più lungo del backbone
-            t1_router = rs + int(0.35 * (T - rs))  # ~35% della parte post-router
-
-            # Router spento prima di router_start_epoch
-            if e < rs:
+            e = int(epoch)
+            # Router spento fino a router_start_epoch
+            if e < router_start_epoch:
                 return 0.0
 
-            # Warmup router: eta_min_router -> 1.0
-            if e < rs + rw:
-                pct = (e - rs + 1) / float(max(1, rw))  # (0,1]
-                return eta_min_router + (1.0 - eta_min_router) * pct
+            # Warmup router: 0 -> 1 in router_warmup epoche
+            if e < router_start_epoch + warmup_router:
+                pct = (e - router_start_epoch + 1) / float(max(1, warmup_router))
+                return pct
 
-            # Plateau LR pieno
-            if e < t1_router:
-                return 1.0
-
-            # Cosine decay 1.0 -> router_min_factor da t1_router a T
-            progress   = (e - t1_router) / float(max(1, T - t1_router))  # 0..1
-            progress   = min(max(progress, 0.0), 1.0)
-            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))      # 1 -> 0
-            return router_min_factor + (1.0 - router_min_factor) * cosine_dec
+            # Cosine decay da (router_start_epoch + router_warmup) a T
+            start = router_start_epoch + warmup_router
+            progress = (e - start) / float(max(1, T - start))
+            progress = min(max(progress, 0.0), 1.0)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
 
         # Optimizer 2e-5
         self.optimizer = AdamW(
             [
-                {'params': self.backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'},
-                {'params': self.router_w, 'lr': 2e-5, 'weight_decay': 0, 'name' : 'router_w'},
-                {'params' : self.router_bias, 'lr' : 2e-5, 'weight_decay': 0, 'name' : 'router_bias'}
-            ], betas=(0.9, 0.98)
+                {'params': backbone_params, 'lr': base_lr, 'weight_decay': wd, 'name' : 'backbone'}, # Conv and Linear
+                {'params' : backbone_norm, 'lr': base_lr, 'weight_decay': 0, 'name' : 'backbone_norm'},
+                {'params': router_params, 'lr': router_lr, 'weight_decay': 0, 'name' : 'router_w'},
+            ], betas=(0.9, 0.98), eps=1e-8
         )
 
         self.lr_scheduler = LambdaLR(self.optimizer, lr_lambda=[
             backbone_lr_lambda,
-            router_lr_lambda,
+            backbone_lr_lambda,
             router_lr_lambda
         ])
 

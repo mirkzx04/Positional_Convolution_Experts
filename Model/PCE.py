@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.nn import LazyLinear
 
 from einops import rearrange
-from timm.models.layers import DropPath
+from timm.layers import DropPath
 
 from Model.Components.Router import Router
 from Model.Components.PCELayer import PCELayer
@@ -81,8 +81,8 @@ class PCENetwork(nn.Module):
             # nn.Linear(4 * last_channel, num_classes),
         )
         self.stem = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, bias=False, padding=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(3, 64, kernel_size=7, stride=2, bias=False, padding=3),
+            nn.BatchNorm2d(64),
             nn.SiLU(inplace=True)
         )
         
@@ -114,8 +114,8 @@ class PCENetwork(nn.Module):
         patch_size = self.patch_extractor.patch_size
         fourier_freq = self.patch_extractor.num_frequencies
         fourier_channel = get_fourie_channel(fourier_freq)
-        inpt_channel = 32
-        out_channel = 32
+        inpt_channel = 64
+        out_channel = 64
 
         for l in range(layer_number):
             current_gate_channel = inpt_channel + fourier_channel
@@ -129,10 +129,7 @@ class PCENetwork(nn.Module):
                 inpt_channel = transition_out
                 out_channel = transition_out
 
-                if l == 2 :
-                    patch_size = patch_size // 4
-                else : 
-                    patch_size = max(1, patch_size // 2)
+                patch_size = max(1, patch_size // 2)
             else:
                 self.layers.append(PCELayer(
                     inpt_channel=inpt_channel,
