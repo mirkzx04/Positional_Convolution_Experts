@@ -94,6 +94,7 @@ class TinyImageNetTrainDataset(Dataset):
             # Input: PIL Image
             T.RandomResizedCrop(224, scale=(0.08, 1.0), interpolation=InterpolationMode.BICUBIC),
             T.RandomHorizontalFlip(p=0.5),
+            T.RandomGrayscale(p=0.10),
             T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
             T.RandAugment(num_ops=2, magnitude=9),
             T.ToTensor(), # Converte in Tensor [C, H, W]

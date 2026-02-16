@@ -104,11 +104,10 @@ class EMADiffLitModule(pl.LightningModule):
         self.aux_loss_weight = 0.0
 
         self.use_mixup_cutmix = False
-        self.mixup_alpha      = 0.2   
-        self.cutmix_alpha     = 0.5
-        self.cutmix_prob      = 0.3
+        self.mixup_alpha      = 0.3   
+        self.cutmix_alpha     = 1.0
+        self.cutmix_prob      = 0.5
 
-        self.z_loss_weigth = 1e-3 if self.current_epoch >= self.router_start_epoch else 0
         self.div_loss_weight = 0
 
         # Accuracy metrics
@@ -121,7 +120,7 @@ class EMADiffLitModule(pl.LightningModule):
         }
         # Loss function
         self.val_loss = torch.nn.CrossEntropyLoss()
-        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.15) # M
 
 
     def forward(self, x, force_specialized = False):
@@ -223,11 +222,13 @@ class EMADiffLitModule(pl.LightningModule):
         e = self.current_epoch
         if e < self.uniform_epochs:
             self.aux_loss_weight = 0
+            self.z_loss_weigth = 0
             self._freeze_router()
 
         elif e >= self.router_start_epoch:
             self._unfreeze_router()
             self.aux_loss_weight = self.alpha_scheduler()
+            self.z_loss_weigth = 1e-3
             self.model.router.router_temp = self.temp_scheduler()
             self.model.router.noise_std = self.noise_scheduler()
 
