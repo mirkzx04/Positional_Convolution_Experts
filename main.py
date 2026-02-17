@@ -247,7 +247,7 @@ if __name__ == "__main__":
         logger = logger,
         precision='32',
         accelerator=device,
-        enable_checkpointing= False,
+        enable_checkpointing= True,
         callbacks=[checkpoint_callback],
         num_sanity_val_steps=0,
     )
