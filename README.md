@@ -76,9 +76,7 @@ Oltre alla cross-entropy del task, vengono impiegate tre loss ausiliarie sul rou
 
 * **Load Balancing Loss**:
 
-  $
-  L_{bal} = E \sum_{i=1}^{E} f_i \cdot P_i
-  $
+  $L_{bal} = E \sum_{i=1}^{E} f_i \cdot P_i$
 
   dove (f_i) è la frazione di token assegnati all’esperto (i) e (P_i) è la probabilità media assegnata a quell’esperto.
 
