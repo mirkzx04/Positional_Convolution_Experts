@@ -49,7 +49,7 @@ $$
 
 Qui $\text{alpha}$ è un parametro apprendibile del layer, mentre $X$ rappresenta la feature map passata al layer successivo. Il `post_block` condiviso è un blocco denso del tipo
 
-$ post_block = \text{Conv}_{3 \times 3} \rightarrow \text{GN} \rightarrow \text{SiLU}.$ 
+$post_block = \text{Conv}_{3 \times 3} \rightarrow \text{GN} \rightarrow \text{SiLU}$ 
 
 Questa struttura coincide con l’implementazione di `PCELayer` e con il flusso di forward di `PCENetwork`.  
 
@@ -76,14 +76,19 @@ Il training è stato eseguito per 150 epoche con `batch_size = 128` su TinyImage
 Oltre alla cross-entropy del task, vengono impiegate tre loss ausiliarie sul router:
 
 * **Load Balancing Loss**:
+
   $$
   L_{bal} = E \sum_{i=1}^{E} f_i \cdot P_i
   $$
+
   dove (f_i) è la frazione di token assegnati all’esperto (i) e (P_i) è la probabilità media assegnata a quell’esperto.
+
 * **Z-Loss**:
+
   $$
   L_z = \frac{1}{N}\sum_j \left(\log \sum_i e^{l_i(x_j)}\right)^2
   $$
+
   che penalizza logit di magnitudo troppo elevata.
 * **Diversity Loss**, che disincentiva pattern di attivazione ridondanti tra esperti minimizzando la correlazione tra le probabilità di routing. 
 
@@ -91,7 +96,7 @@ Oltre alla cross-entropy del task, vengono impiegate tre loss ausiliarie sul rou
 
 ### Variazione del pool di esperti
 
-Analizziamo tre configurazioni MoE (4, 8, 16 esperti) rispetto a una baseline densa. La tabella mostra che la configurazione MoE-4 è la più performante, raggiungendo il (63.6%) di Top-1 accuracy, valore molto vicino al modello denso ((63.85%)). Tuttavia, aumentando il numero di esperti, le performance degradano progressivamente.
+Analizziamo tre configurazioni MoE (4, 8, 16 esperti) rispetto a una baseline densa. La tabella mostra che la configurazione MoE-4 è la più performante, raggiungendo il $63.6%$ di Top-1 accuracy, valore molto vicino al modello denso $63.85%$ Tuttavia, aumentando il numero di esperti, le performance degradano progressivamente.
 
 La metrica `spec_entropy` misura l’entropia normalizzata della distribuzione di probabilità del router **prima del dispatch**, mediata sui token: valori più alti indicano un router meno deciso nella scelta locale dell’esperto. Al contrario, `entropy_norm_mean` misura l’entropia normalizzata della distribuzione di utilizzo degli esperti **dopo il dispatch**, quindi descrive quanto il traffico complessivo sia globalmente distribuito in modo uniforme nel pool. In altre parole, `spec_entropy` cattura l’incertezza locale del router, mentre `entropy_norm_mean` cattura il bilanciamento globale del carico. Questa distinzione è esattamente quella implementata nel `MoEAggregator`. 
 
@@ -115,9 +120,9 @@ Per completezza, riportiamo anche il costo inferenziale medio delle diverse conf
 
 L’analisi delle metriche di dispatching mostra che il router non collassa, ma diventa progressivamente più difficile da bilanciare all’aumentare del numero di esperti.
 
-Primo, `entropy_norm_mean` resta elevata, segnalando che il pool di esperti rimane nel complesso attivo. Tuttavia, questa metrica da sola non basta a garantire un buon bilanciamento. Infatti, `imbalance_mean` cresce drasticamente da 9.76 a 90.18 nel caso con 16 esperti, indicando che alcuni esperti ricevono molto più traffico di altri. Quindi il problema non è un collasso totale del routing, ma un’assegnazione fortemente sbilanciata.
+Primo, `entropy_norm_mean` resta elevata, segnalando che il pool di esperti rimane nel complesso attivo. Tuttavia, questa metrica da sola non basta a garantire un buon bilanciamento. Infatti, `imbalance_mean` cresce drasticamente da $9.76$ a $90.18$ nel caso con 16 esperti, indicando che alcuni esperti ricevono molto più traffico di altri. Quindi il problema non è un collasso totale del routing, ma un’assegnazione fortemente sbilanciata.
 
-Secondo, il `drop_rate` resta quasi costante attorno a (0.02)–(0.03), e il `cap_ratio` rimane stabile, suggerendo che il degrado non dipenda principalmente da colli di bottiglia di capacità o da un eccessivo numero di token scartati.
+Secondo, il `drop_rate` resta quasi costante attorno a $0.02$–$0.03$, e il `cap_ratio` rimane stabile, suggerendo che il degrado non dipenda principalmente da colli di bottiglia di capacità o da un eccessivo numero di token scartati.
 
 Terzo, non emergono **esperti morti**: nei run analizzati il comportamento è coerente con `dead_mean \approx 0`, mentre `active_mean` resta elevata. Questo è importante perché indica che il problema non è l’inattività completa di parte del pool, ma piuttosto una forte sotto-utilizzazione relativa di alcuni esperti rispetto ad altri. Le metriche `dead_mean` e `active_mean` sono esplicitamente previste nel sistema di aggregazione del progetto. 
 
