@@ -55,17 +55,17 @@ Questa struttura coincide con l’implementazione di `PCELayer` e con il flusso 
 Ad ogni blocco MoE, la feature map in ingresso viene scomposta in patch di dimensione (\text{patch_size} \times \text{patch_size}). Procedendo in profondità nella rete, il valore di `patch_size` viene ridotto nei punti di downsampling fino a un minimo di (2 \times 2). Le patch vengono inoltre arricchite con feature posizionali Fourier prima del routing.  
 
 Il router riceve in input, per ogni patch, la concatenazione tra average pooling e max pooling spaziale del token arricchito:
-$
-R_{in} = [\text{AVG}(T_{in}); \text{MAX}(T_{in})].
-$
+
+$R_{in} = [\text{AVG}(T_{in}); \text{MAX}(T_{in})].$
+
 Successivamente applica LayerNorm e una proiezione lineare per ottenere i logit degli esperti:
-$
-l = \text{Linear}(\text{LN}(R_{in})).
-$
+
+$l = \text{Linear}(\text{LN}(R_{in})).$
+
 Le probabilità finali sono ottenute tramite
-$
-S_{exp} = \text{Softmax}(l / \tau),
-$
+
+$S_{exp} = \text{Softmax}(l / \tau)$
+
 e il routing seleziona l’esperto Top-1 soggetto a vincoli di capacità. Questa formulazione è coerente con `RouterGate` e `Router`.  
 
 ### Training
@@ -82,9 +82,7 @@ Oltre alla cross-entropy del task, vengono impiegate tre loss ausiliarie sul rou
 
 * **Z-Loss**:
 
-  $
-  L_z = \frac{1}{N}\sum_j \left(\log \sum_i e^{l_i(x_j)}\right)^2
-  $
+  $L_z = \frac{1}{N}\sum_j \left(\log \sum_i e^{l_i(x_j)}\right)^2$
 
   che penalizza logit di magnitudo troppo elevata.
 * **Diversity Loss**, che disincentiva pattern di attivazione ridondanti tra esperti minimizzando la correlazione tra le probabilità di routing. 
@@ -119,7 +117,7 @@ L’analisi delle metriche di dispatching mostra che il router non collassa, ma 
 
 Primo, `entropy_norm_mean` resta elevata, segnalando che il pool di esperti rimane nel complesso attivo. Tuttavia, questa metrica da sola non basta a garantire un buon bilanciamento. Infatti, `imbalance_mean` cresce drasticamente da $9.76$ a $90.18$ nel caso con 16 esperti, indicando che alcuni esperti ricevono molto più traffico di altri. Quindi il problema non è un collasso totale del routing, ma un’assegnazione fortemente sbilanciata.
 
-Secondo, il `drop_rate` resta quasi costante attorno a $0.02$–$0.03$, e il `cap_ratio` rimane stabile, suggerendo che il degrado non dipenda principalmente da colli di bottiglia di capacità o da un eccessivo numero di token scartati.
+Secondo, il `drop_rate` resta quasi costante attorno a $0.02$ – $0.03$, e il `cap_ratio` rimane stabile, suggerendo che il degrado non dipenda principalmente da colli di bottiglia di capacità o da un eccessivo numero di token scartati.
 
 Terzo, non emergono **esperti morti**: nei run analizzati il comportamento è coerente con `dead_mean \approx 0`, mentre `active_mean` resta elevata. Questo è importante perché indica che il problema non è l’inattività completa di parte del pool, ma piuttosto una forte sotto-utilizzazione relativa di alcuni esperti rispetto ad altri. Le metriche `dead_mean` e `active_mean` sono esplicitamente previste nel sistema di aggregazione del progetto. 
 
