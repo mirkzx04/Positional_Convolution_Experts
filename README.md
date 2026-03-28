@@ -52,7 +52,7 @@ $post\_block = \text{Conv}_{3 \times 3} \rightarrow \text{GN} \rightarrow \text{
 
 This structure matches the implementation of `PCELayer` and the forward pass of `PCENetwork`.
 
-At each MoE block, the input feature map is decomposed into patches of size $\text{patch\_size} \times \text{patch\_size}$. 
+At each MoE block, the input feature map is decomposed into patches of size $\text{patch\\_size} \times \text{patch\\_size}$. 
 
 Proceeding deeper into the network, the `patch_size` value is reduced at downsampling points to a minimum of $2 \times 2$. The patches are also enriched with Fourier positional features prior to routing.
 
