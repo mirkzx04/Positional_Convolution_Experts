@@ -1,11 +1,7 @@
-import imp
 import torch
 import torch.nn as nn
 
-from torch.nn import LazyLinear
-
 from einops import rearrange
-from timm.layers import DropPath
 
 from Model.Components.Router import Router
 from Model.Components.PCELayer import PCELayer
@@ -20,14 +16,10 @@ class PCENetwork(nn.Module):
                     num_experts,
                     layer_number,
                     patch_size,
-                    dropout_exp,
-                    dropout_head,
-                    drop_path,
                     num_classes,
                     router_temp,
                     capacity_factor_train,
                     capacity_factor_val,
-                    eom_p,
                  ):
         super().__init__()
 
@@ -53,11 +45,9 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        self.drop_path = DropPath(drop_path)
         
         last_channel = self.create_layers(
             num_experts=num_experts,
-            dropout=dropout_exp,
             layer_number=layer_number,
         )        
 
@@ -67,18 +57,12 @@ class PCENetwork(nn.Module):
             router_temp = router_temp,
             capacity_factor_train=capacity_factor_train,
             capacity_factor_eval=capacity_factor_val,
-            eom_p = eom_p,
         )
 
         self.pooler = nn.AdaptiveAvgPool2d(1)
         self.flatten = nn.Flatten()
         self.prediction_head = nn.Sequential(
-            nn.LayerNorm(last_channel),
-            nn.Dropout(dropout_head),
             nn.Linear(last_channel, num_classes),
-            # nn.GELU(),
-            # nn.Dropout(0.05),
-            # nn.Linear(4 * last_channel, num_classes),
         )
         self.stem = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=7, stride=2, bias=False, padding=3),
@@ -94,7 +78,7 @@ class PCENetwork(nn.Module):
             num_layers=len(num_experts_per_layer),
             num_experts=num_experts_per_layer,
         )
-    def create_layers(self, num_experts, dropout, layer_number):
+    def create_layers(self, num_experts, layer_number):
         """
         Create layers of PCE Network
 
@@ -129,16 +113,16 @@ class PCENetwork(nn.Module):
                 inpt_channel = transition_out
                 out_channel = transition_out
 
-                patch_size = max(1, patch_size // 2)
+                patch_size = max(2, patch_size // 2)
             else:
                 self.layers.append(PCELayer(
                     inpt_channel=inpt_channel,
                     out_channel=out_channel,
                     num_experts=num_experts,
-                    dropout=dropout,
                     patch_size=patch_size,
                     fourie_freq=fourier_freq,
                     gate_channel=current_gate_channel,
+                    kernel_size = 3,
                     downsampling=False
                 ))
                 
@@ -183,25 +167,20 @@ class PCENetwork(nn.Module):
                 # Store layer attributes for cleaner access
                 experts = layer.experts
                 merge_gn = layer.merge_gn
+                merge_act = layer.activation_merge
                 gamma = layer.gamma
+                post_block = layer.post_block
                 
                 # Extract patches from the current feature map
-                pre_layer = self.layers[layer_idx - 1] if layer_idx - 1 < len(self.layers) else None
+                patch_size = layer.patch_size
+                self.patch_extractor.patch_size = patch_size
 
-                if isinstance(pre_layer, DownsampleResBlock) or pre_layer is None or layer_idx == 0: 
-                    patch_size = layer.patch_size
-                    self.patch_extractor.patch_size = patch_size
+                # Get token from X patches
+                h_patches, w_patches, X_patches = self.patch_extractor.get_patches(X)
+                P, C, H, W = X_patches.shape[1:] # Shape : [B, P, C, H, W]
+                N = B*P 
 
-                    # Get token from X patches
-                    h_patches, w_patches, X_patches = self.patch_extractor.get_patches(X)
-                    P, C, H, W = X_patches.shape[1:] # Shape : [B, P, C, H, W]
-                    N = B*P 
-
-                    X_tokens = X_patches.reshape(B * P, C, H, W)
-
-                    
-                else:
-                    X_tokens = X # Shape : [N, C, H, W]
+                X_tokens = X_patches.reshape(B * P, C, H, W)
                 
                 # Get positional features from fourier
                 positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device)
@@ -265,20 +244,25 @@ class PCENetwork(nn.Module):
                     contrib = y_e * w_e  # [Ne, C_out, H_out, W_out]
                     outputs.index_add_(0, n_e, contrib)
                 
-                outputs = X_tokens + self.drop_path(gamma * outputs)
+                outputs = X_tokens + gamma * outputs
                 
                 # Reassemble patches back into spatial feature map
-                next_layer = self.layers[layer_idx + 1] if layer_idx + 1 < len(self.layers) else None
-                if next_layer is None or isinstance(next_layer, DownsampleResBlock):
-                    X = rearrange(
-                        outputs.view(B, -1, C_out, H_out, W_out), 
-                        'b (h w) c ph pw -> b c (h ph) (w pw)',
-                        h=h_patches, w=w_patches
-                    )
-                else : 
-                    X = outputs      
+                _, C_out, H_out, W_out = outputs.shape
 
-                X = merge_gn(X)
+                X = rearrange(
+                    outputs.view(B, P, C_out, H_out, W_out), 
+                    'b (h w) c ph pw -> b c (h ph) (w pw)',
+                    h=h_patches, w=w_patches
+                )
+
+                moe_out = merge_gn(X)
+                moe_out = merge_act(moe_out)
+
+                res = post_block(moe_out)
+                moe_out = moe_out + res
+
+                X = X + moe_out
+
                 tot_z_loss += z_loss
                 tot_imb_loss += imb_loss
                 tot_div_loss += div_loss

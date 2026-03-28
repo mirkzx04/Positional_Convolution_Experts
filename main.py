@@ -1,17 +1,13 @@
 import os
-import tarfile
-import urllib.request
 import numpy as np 
 import matplotlib.pyplot as plt
-import itertools
+import json
 
 import torch
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import gc
 gc.collect()
 torch.cuda.empty_cache()
-
-from tqdm import tqdm
 
 from torch.utils.data import DataLoader
 
@@ -33,41 +29,6 @@ from EMADiffLitModule import EMADiffLitModule
 
 def count_number_of_classes(train_labels, val_labels):   
     return len(np.unique(np.concatenate([train_labels, val_labels])).tolist())
-
-def get_cifar10_sets(batch_size, cifar10_path = './Data/cifar-10-batches-py'):
-    """
-    Initialize the CIFAR-10 dataset and create DataLoaders for training and validation.
-
-    Args:
-        batch_size (int) 
-        cifar10_path (str): Path of the CIFAR-10 dataset
-    """
-    print('-- Initializing the CIFAR-10 dataset... -- ')
-    # Create CIFAR-10 dataset
-    cifar10 = CIFAR10Dataset(cifar10_path)
-    cifar10_train = CIFAR10TrainDataset(cifar10)
-    cifar10_val = CIFAR10ValidationDataset(cifar10)
-
-    # Create DataLoader for CIFAR-10 training and validation datasets
-    cifar10_train_loader = DataLoader(cifar10_train, batch_size=batch_size, shuffle=True)
-    cifar10_val_loader = DataLoader(cifar10_val, batch_size=batch_size, shuffle=False)
-
-    # Get numer of classes in labels
-    num_classes = count_number_of_classes(cifar10_train.lables, cifar10_val.lables)
-
-    return {
-        'datasets': {
-            'train': cifar10_train,
-            'val': cifar10_val,
-        },
-        'dataloaders': {
-            'train': cifar10_train_loader,
-            'val': cifar10_val_loader
-        },
-        'name' : 'CIFAR10',
-        'num_classes' : num_classes,
-    }
-
 
 def get_tinyimagenet_sets(batch_size, tinyimagenet_path = 'Data/tiny-imagenet-200'):
     """
@@ -103,36 +64,10 @@ def get_tinyimagenet_sets(batch_size, tinyimagenet_path = 'Data/tiny-imagenet-20
         'unique_lables' : unique_labels
     }
 
+    with open('class_mapping', 'w') as f:
+        json.dump(tiny_image_net.class_to_idx, f, indent=4)
+
     return tiny_image_net_dic
-
-def get_cifar100_sets(batch_size, cifar100_path = './Data/cifar-100-python'):
-    """
-    Initialize the Cifar-100 dataset and create Dataloaders for training and validation
-    Args : 
-        batch_size (int) 
-        cifar100_path (str): Path of the CIFAR-100 dataset
-    """
-    cifar100 = CIFAR100Dataset(cifar100_path)
-    cifar100_train = CIFAR100TrainDataset(cifar100)
-    cifar100_val = CIFAR100ValidationDataset(cifar100)
-
-    cifar100_train_loader = DataLoader(cifar100_train, batch_size=batch_size, shuffle=True)
-    cifar100_val_loader = DataLoader(cifar100_val, batch_size=batch_size, shuffle=False)
-
-    num_classes = count_number_of_classes(cifar100_train.lables, cifar100_val.lables)
-
-    return {
-        'datasets': {
-            'train': cifar100_train,
-            'val': cifar100_val,
-        },
-        'dataloaders': {
-            'train': cifar100_train_loader,
-            'val': cifar100_val_loader
-        },
-        'name' : 'CIFAR100',
-        'num_classes' : num_classes,
-    }
 
 if __name__ == "__main__":
 
@@ -142,51 +77,31 @@ if __name__ == "__main__":
     print(f'-- Start with device : {device} ---')
     print('\n ------------------------ \n')
 
-    # param_grid = {
-    #     'dropout_exp': [0.10, 0.15, 0.20],
-    #     'eom_p': [0.10, 0.15, 0.20],
-    #     'dropout_head': [0.10, 0.15]
-    # }
-    # keys, values = zip(*param_grid.items())
-    # combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-
     # Hyperparameters of model
     num_exp = 16
     layer_number = 8
     patch_size = 16
-    lr = 0.0002
-    router_lr = 0.0005
-    dropout_exp = 0.15
-    dropout_head = 0.10
-    drop_path = 0.20
-    eom_p = 0.15
-    weight_decay = 0.004 # M
+    lr = 0.001
+    router_lr = 0.001
+    weight_decay = 1e-3 # M
 
     # Hyperparameters of router
     capacity_factor_train = 2.0
-    capacity_factor_val = 2.25
+    capacity_factor_val = 2.0
 
-    alpha_init = 7e-3
-    alpha_final = 4e-4 # M
-    alpha_epochs =  200
+    alpha_init = 0.05
+    alpha_final = 5e-4 # M
+    alpha_epochs =  10
 
     temp_init = 2.0
     temp_mid = 1.2
-    temp_final = 0.65
-    temp_epochs = 200
+    temp_final = 0.85
+    temp_epochs = 120
 
     # Training metrics
     train_epochs = 150
-    uniform_epochs = 35
+    uniform_epochs = 10
     batch_size = 128
-
-    print("\n--- Hyperparameters ---")
-    print(f"Model: experts={num_exp},layers={layer_number}, patch={patch_size}, lr={lr}, wd={weight_decay}")
-    print(f"Training: epochs={train_epochs}, batch={batch_size}\n")
-    print('\n ------------------------ \n')
-
-    # cifar10_sets = get_cifar10_sets(batch_size)
-    # cifar100_sets = get_cifar100_sets(batch_size)
 
     tiny_set = get_tinyimagenet_sets(batch_size)
     train_loader = tiny_set['dataloaders']['train']
@@ -198,12 +113,7 @@ if __name__ == "__main__":
 
     print(f'--- Dataset loaded --- \n')
 
-    # for i, params in tqdm(enumerate(combinations)):
-        # dropout_exp = params['dropout_exp']
-        # eom_p = params['eom_p']
-        # dropout_head = params['dropout_head']
-
-    run_name = f"test-CutMix-MixAlpha"
+    run_name = f"test {num_exp} experts - post_block-KS=1"
 
     # Defines checkpointer and Logger
     logger = WandbLogger(
@@ -225,14 +135,10 @@ if __name__ == "__main__":
         num_experts = num_exp,
         layer_number = layer_number,
         patch_size = patch_size,
-        dropout_exp = dropout_exp,
-        dropout_head = dropout_head,
-        drop_path = drop_path,
         num_classes=num_classes,
         router_temp=temp_init,
         capacity_factor_train = capacity_factor_train,
         capacity_factor_val = capacity_factor_val,
-        eom_p = eom_p
         )
     # pce = torch.compile(pce, mode="reduce-overhead")
 
@@ -263,3 +169,9 @@ if __name__ == "__main__":
     del pce, lit_module, trainer, logger
     torch.cuda.empty_cache()
     gc.collect()       
+
+
+
+
+
+    

@@ -15,7 +15,6 @@ class Router(nn.Module):
         self,
         num_experts,
         num_layers,
-        eom_p,
         router_temp = 1.5,
         capacity_factor_train = 1.25,
         capacity_factor_eval = 1.50,
@@ -36,7 +35,6 @@ class Router(nn.Module):
         """
         self.num_experts = num_experts
         self.num_layers = num_layers
-        self.eom_p = eom_p
         
         self.capacity_factor_train = capacity_factor_train
         self.capacity_factor_eval = capacity_factor_eval
@@ -76,7 +74,7 @@ class Router(nn.Module):
         # Route based on current phase (Uniform < 30 epochs, Specialized >= 30 epochs)
         if current_epoch == None:
             return self._specialized_routing(X, logits_temp, logits_std)
-        if current_epoch < 35:
+        if current_epoch < 10:
             return self._uniform_routing(X, logits_temp, logits_std)
         else:
             return self._specialized_routing(X, logits_temp, logits_std)
