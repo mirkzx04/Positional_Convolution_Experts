@@ -31,21 +31,20 @@ E_{out} = \text{rearrange}(E_{out}),
 $$
 
 $$
-moe_out = \text{SiLU}(\text{GN}(E_{out})),
+moe\_out = \text{SiLU}(\text{GN}(E_{out})),
 $$
 
 $$
-res = post_block(moe_out),
+res = post_block(moe\_out),
 $$
 
 $$
-moe_out = moe_out + res,
+moe\_out = moe\_out + res,
 $$
 
 $$
 X = X + moe_out.
 $$
-
 
 Qui $\text{alpha}$ è un parametro apprendibile del layer, mentre $X$ rappresenta la feature map passata al layer successivo. Il `post_block` condiviso è un blocco denso del tipo
 
@@ -77,17 +76,17 @@ Oltre alla cross-entropy del task, vengono impiegate tre loss ausiliarie sul rou
 
 * **Load Balancing Loss**:
 
-  $$
+  $
   L_{bal} = E \sum_{i=1}^{E} f_i \cdot P_i
-  $$
+  $
 
   dove (f_i) è la frazione di token assegnati all’esperto (i) e (P_i) è la probabilità media assegnata a quell’esperto.
 
 * **Z-Loss**:
 
-  $$
+  $
   L_z = \frac{1}{N}\sum_j \left(\log \sum_i e^{l_i(x_j)}\right)^2
-  $$
+  $
 
   che penalizza logit di magnitudo troppo elevata.
 * **Diversity Loss**, che disincentiva pattern di attivazione ridondanti tra esperti minimizzando la correlazione tra le probabilità di routing. 
