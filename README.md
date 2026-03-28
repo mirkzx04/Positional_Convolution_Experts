@@ -47,7 +47,7 @@ X = X + moe_out.
 $$
 
 
-Qui $\text{alpha} $ è un parametro apprendibile del layer, mentre $X$ rappresenta la feature map passata al layer successivo. Il `post_block` condiviso è un blocco denso del tipo
+Qui $\text{alpha}$ è un parametro apprendibile del layer, mentre $X$ rappresenta la feature map passata al layer successivo. Il `post_block` condiviso è un blocco denso del tipo
 
 $ post_block = \text{Conv}_{3 \times 3} \rightarrow \text{GN} \rightarrow \text{SiLU}.$ 
 
