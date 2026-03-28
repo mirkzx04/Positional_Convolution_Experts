@@ -13,9 +13,9 @@ In questo lavoro proponiamo un’architettura Vision MoE gerarchica custom testa
 ### Descrizione dell’architettura
 
 L’architettura proposta riprende una struttura di tipo ResNet e la adatta a un setting MoE gerarchico. Ogni esperto è un blocco convoluzionale residuale del tipo
-$ 
-\text{Conv}*{3 \times 3} \rightarrow \text{GN} \rightarrow \text{SiLU} \rightarrow \text{Conv}*{3 \times 3} \rightarrow \text{GN},
-$ 
+$$
+\text{Conv}_{3 \times 3} \rightarrow \text{GN} \rightarrow \text{SiLU} \rightarrow \text{Conv}*{3 \times 3} \rightarrow \text{GN},
+$$ 
 seguito da una connessione residua interna all’esperto. I layer MoE sono alternati a blocchi densi di downsampling. Nel codice, gli esperti sono implementati come `ConvExpert`, mentre i blocchi di transizione sono implementati come `DownsampleResBlock`.  
 
 Ogni layer MoE contiene (E) esperti, un’operazione di ricomposizione spaziale dei token processati (`rearrange`), una normalizzazione con GroupNorm, una SiLU e un blocco denso condiviso `post_block`. Indicando con (T_{in}) i token in ingresso e con (E_{out}) l’output aggregato degli esperti, la dinamica del layer può essere riassunta come:
