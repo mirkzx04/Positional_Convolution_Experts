@@ -141,7 +141,3 @@ A critical observation concerns the trend of the validation loss, which tends to
 In conclusion, the hierarchical MoE architecture on TinyImageNet shows that greater sparse capacity does not automatically translate into better generalization. The best regime is the one with 4 experts; wider configurations suffer from load imbalance that the auxiliary loss fails to compensate for. The observed overfitting does not seem to depend solely on local kernel sizes or solely on the presence of dense post-processing, but appears primarily linked to the difficulty of stably optimizing traffic allocation among experts.
 
 All results can be reproduced by downloading the entire project repository and running the experimental script `main_experiments.py`, which calls the log analysis and model comparison functions. In the materials you uploaded, this file is present as the dedicated script for final experiments.
-
-***
-
-Would you like me to proofread any specific section of the repository code to ensure the variable names and architectural references match perfectly with this documentation?
