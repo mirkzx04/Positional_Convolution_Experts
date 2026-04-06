@@ -143,14 +143,6 @@ class Router(nn.Module):
         combine  = (w[:, :, None] * one_hot_pos).to(X.dtype)                   # [N, E, Ccap]
         dispatch = (mask[:, :, None].bool() & one_hot_pos.bool())   
 
-        if self.training and self.eom_p > 0:
-            N, E, Ccap = combine.shape
-
-            # Mask on (N, E)
-            drop_mask = (torch.rand(N, E, device= combine.device) > self.eom_p).float()
-            drop_mask = drop_mask.unsqueeze(-1) # Shape [N, E, 1]
-            combine = combine * drop_mask # Reset gating for some (token, experts)
-
         return dispatch, combine, z_loss, aux_loss, div_loss, logits_std, logits.detach()
 
     def _uniform_routing(self, X, logits, logits_std):
