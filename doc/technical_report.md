@@ -53,9 +53,7 @@ $$
 \text{MoE}_{\text{out}} = \text{SiLU}\!\left( \text{GN}\!\left( R_{\text{out}}(O) \right) \right).
 $$
 
-This step stabilizes the feature distribution after the sparse processing and before the subsequent dense phase.
-
-The third block is a shared convolutional block:
+This step stabilizes the feature distribution after the sparse processing and before the subsequent dense phase. The third block is a shared convolutional block:
 
 $$
 \text{res}
@@ -67,9 +65,7 @@ $$
 \text{SiLU}.
 $$
 
-Its role is to locally mix the features produced by the experts. This is important because the patches are processed separately and then reinserted into their original positions: without a local dense operation, discontinuities could emerge between adjacent patches or overly sharp boundaries between regions processed by different experts.
-
-Finally, the layer applies two residual connections:
+Its role is to locally mix the features produced by the experts. This is important because the patches are processed separately and then reinserted into their original positions: without a local dense operation, discontinuities could emerge between adjacent patches or overly sharp boundaries between regions processed by different experts. Finally, the layer applies two residual connections:
 
 $$
 \text{MoE}_{\text{out}} = \text{MoE}_{\text{out}} + \text{res},
