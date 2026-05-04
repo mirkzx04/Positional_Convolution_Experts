@@ -55,15 +55,7 @@ $$
 
 This step stabilizes the feature distribution after the sparse processing and before the subsequent dense phase. The third block is a shared convolutional block:
 
-$$
-\text{res}
-=
-\text{Conv}_{3 \times 3}
-\rightarrow
-\text{GN}
-\rightarrow
-\text{SiLU}.
-$$
+$$ \text{res} =\text{Conv}_{3 \times 3}\rightarrow\text{GN}\rightarrow\text{SiLU}$$
 
 Its role is to locally mix the features produced by the experts. This is important because the patches are processed separately and then reinserted into their original positions: without a local dense operation, discontinuities could emerge between adjacent patches or overly sharp boundaries between regions processed by different experts. Finally, the layer applies two residual connections:
 
@@ -82,11 +74,7 @@ The first residual integrates the contribution of the dense convolutional block,
 The `Router Gate` is the module that assigns each patch to one of the available experts. For each patch $X_p$, the gate constructs a compact representation using global spatial statistics:
 
 $$
-R_{\text{in}} =
-\left[
-\text{mean}(X_p);
-\text{amax}(X_p)
-\right],
+R_{\text{in}} =\left[\text{mean}(X_p);\text{amax}(X_p)\right],
 $$
 
 where $\text{mean}(X_p)$ and $\text{amax}(X_p)$ are computed along the spatial dimensions of the patch. In this way, each patch is represented by a vector that summarizes both its mean activation and its maximum activation.
@@ -116,10 +104,7 @@ $$
 However, each expert has a maximum capacity, denoted by `capacity`, which limits the number of patches it can process in a single forward pass. The capacity is computed based on the total number of patches, the number of experts, and the `capacity_factor`:
 
 $$
-C_{\text{cap}} =
-\left\lceil
-\frac{\text{capacity\_factor} \cdot N}{N_{\text{exp}}}
-\right\rceil,
+C_{\text{cap}} =\left\lceil\frac{\text{capacity\_factor} \cdot N}{N_{\text{exp}}}\right\rceil,
 $$
 
 where $N$ is the total number of patches to be routed. If an expert receives more patches than its capacity, only the patches with the highest routing probability are retained, while the others are dropped from the sparse path.
@@ -212,10 +197,7 @@ where $p_{j,i}$ is the routing probability assigned to expert $i$ for patch $j$.
 The load-balancing loss is
 
 $$
-\mathcal{L}_{\text{bal}}
-=
-N_{\text{exp}}
-\sum_{i=1}^{N_{\text{exp}}} f_i P_i.
+\mathcal{L}_{\text{bal}}=N_{\text{exp}}\sum_{i=1}^{N_{\text{exp}}} f_i P_i.
 $$
 
 This loss combines the actual load of the experts, represented by $f_i$, with the mean importance assigned by the router, represented by $P_i$.
@@ -229,15 +211,7 @@ The `Z-Loss` penalizes excessively large routing logits. Its purpose is to stabi
 The formula is
 
 $$
-\mathcal{L}_z
-=
-\frac{1}{N}
-\sum_{j=1}^{N}
-\left(
-\log
-\sum_{i=1}^{N_{\text{exp}}}
-e^{\tilde{\ell}_{j,i}}
-\right)^2,
+\mathcal{L}_z=\frac{1}{N}\sum_{j=1}^{N}\left(\log\sum_{i=1}^{N_{\text{exp}}}e^{\tilde{\ell}_{j,i}}\right)^2,
 $$
 
 where $\tilde{\ell}_{j,i}$ is the temperature-scaled logit for patch $j$ and expert $i$.
@@ -269,12 +243,7 @@ $$
 The diversity loss is defined as
 
 $$
-\mathcal{L}_{\text{div}}
-=
-\frac{1}{N_{\text{exp}}^2}
-\sum_{i=1}^{N_{\text{exp}}}
-\sum_{j=1}^{N_{\text{exp}}}
-\left( C_{i,j} - I_{i,j} \right)^2,
+\mathcal{L}_{\text{div}}=\frac{1}{N_{\text{exp}}^2}\sum_{i=1}^{N_{\text{exp}}}\sum_{j=1}^{N_{\text{exp}}}\left( C_{i,j} - I_{i,j} \right)^2,
 $$
 
 where $I$ is the identity matrix. The goal is to make the correlation matrix as close as possible to the identity: high on the diagonal and low off the diagonal.
@@ -286,21 +255,13 @@ where $I$ is the identity matrix. The goal is to make the correlation matrix as 
 The total auxiliary router loss is
 
 $$
-\mathcal{L}_{\text{router}}
-=
-\alpha \mathcal{L}_{\text{bal}}
-+
-\beta \mathcal{L}_z
-+
-\lambda_{\text{div}} \mathcal{L}_{\text{div}}.
+\mathcal{L}_{\text{router}}=\alpha \mathcal{L}_{\text{bal}}+\beta \mathcal{L}_z+\lambda_{\text{div}} \mathcal{L}_{\text{div}}.
 $$
 
 In the project, the weights are
 
 $$
-\beta = 10^{-4},
-\qquad
-\lambda_{\text{div}} = 0.01,
+\beta = 10^{-4},\qquad\lambda_{\text{div}} = 0.01,
 $$
 
 while $\alpha$ is scheduled during training rather than fixed.
@@ -308,11 +269,7 @@ while $\alpha$ is scheduled during training rather than fixed.
 The total training loss is therefore
 
 $$
-\mathcal{L}_{\text{total}}
-=
-\mathcal{L}_{\text{CE}}
-+
-\mathcal{L}_{\text{router}},
+\mathcal{L}_{\text{total}}=\mathcal{L}_{\text{CE}}+\mathcal{L}_{\text{router}},
 $$
 
 that is,
@@ -365,22 +322,13 @@ $$
 The normalized entropy of the distribution is
 
 $$
-H_{\text{spec}}(p)
-=
-\frac{
--\sum_{i=1}^{N_{\text{exp}}} p_i \log(p_i)
-}{
-\log(N_{\text{exp}})
-}.
+H_{\text{spec}}(p)=\frac{-\sum_{i=1}^{N_{\text{exp}}} p_i \log(p_i)}{\log(N_{\text{exp}})}.
 $$
 
 The final metric is the average over all patches:
 
 $$
-\text{spec\_entropy}
-=
-\frac{1}{N}
-\sum_{j=1}^{N} H_{\text{spec}}(p_j).
+\text{spec\_entropy}=\frac{1}{N}\sum_{j=1}^{N} H_{\text{spec}}(p_j).
 $$
 
 High values indicate that the router produces more uniform distributions, meaning it is less confident in expert selection. Low values indicate sharper distributions and therefore more distinct choices.
@@ -397,14 +345,7 @@ $$
 
 The normalized entropy is
 
-$$
-H_{\text{usage}}
-=
-\frac{
--\sum_{i=1}^{N_{\text{exp}}} q_i \log(q_i)
-}{
-\log(N_{\text{exp}})
-}.
+$H_{\text{usage}\frac-\sum_{i=1}^{N_{\text{exp}}} q_i \log(q_i}\log(N_{\text{exp}}).
 $$
 
 This metric takes values between 0 and 1. A value close to 1 indicates that traffic is distributed across many experts, while a value close to 0 indicates that traffic is concentrated on only a few experts.
