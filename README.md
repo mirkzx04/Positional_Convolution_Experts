@@ -115,7 +115,7 @@ In the project, these metrics serve to distinguish between three different pheno
 
 **Accuracy & Latency**
 
-<img src="img/Best_MoEvsDense.png" width="500" align="left" style="margin-right: 20px; margin-bottom: 10px;">
+<img src="img/Best_MoEvsDense.png" width="1000" align="left" style="margin-right: 20px; margin-bottom: 10px;">
 
 | Model  | Top-1 Acc ↑ | Val CE ↓ | spec_entropy ↓ |
 | ------ | ----------- | -------- | -------------- |
@@ -128,7 +128,7 @@ In the project, these metrics serve to distinguish between three different pheno
 
 The MoE model with 4 experts is the one that achieves the best accuracy among the sparse configurations. It is also the model with the lowest `spec_entropy`, therefore the one where the router produces the sharpest decisions. However, it cannot be concluded that better local specialization of the router directly implies better accuracy: all MoE setups still show signs of overfitting. Furthermore, subsequent tests suggest that a significant part of the performance also depends on the dense post-processing after the `rearrange` step.
 
-<img src="img/MoE vs MoE.png" width="750" style="margin-right: 20px; margin-bottom: 10px;">
+<img src="img/MoEvsMoE.png" width="1000" style="margin-right: 20px; margin-bottom: 10px;">
 
 | Model      | Top-1 on inference subset (%) ↑ | Avg Latency (ms) ↓ | Std Latency (ms) ↓ |
 | ---------- | ------------------------------- | ------------------ | ------------------ |
@@ -141,7 +141,7 @@ The MoE model with 4 experts is the one that achieves the best accuracy among th
 
 **Router Metrics**
 
-<img src="img/MoE_metrics.png" width="600" align="left" style="margin-right: 20px; margin-bottom: 10px;">
+<img src="img/MoE_Metrics.png" width="1000" align="left" style="margin-right: 20px; margin-bottom: 10px;">
 
 | Model  | entr_norm | imbalance | drop_rate | cap_ratio |
 | ------ | --------- | --------- | --------- | --------- |
@@ -159,7 +159,7 @@ During training, all MoE setups show signs of overfitting: the training loss con
 
 Two main architectural hypotheses were tested:
 
-<img src="img/Refine_dense_blocks_MoE16.png" width="1000" style="margin-right: 20px; margin-bottom: 10px;">
+<img src="img/Refine__dense_blocks_MoE16.png" width="1000" style="margin-right: 20px; margin-bottom: 10px;">
 
 1. **Artificial Receptive Field**: In the deeper layers, the patches reach sizes of 2 x 2. In this case, experts with 3 x 3 kernels could introduce an artificial receptive field relative to the actual size of the patch. The test was conducted by replacing the 3 x 3 kernels of the last MoE blocks with 1 x 1 kernels. This modification did not reduce overfitting.
 
