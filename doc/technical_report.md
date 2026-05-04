@@ -50,7 +50,7 @@ $$
 The reconstructed feature map is then normalized and activated:
 
 $$
-\operatorname{MoE}_{\text{out}} = \operatorname{SiLU}\!\left( \operatorname{GN}\!\left( R_{\text{out}}(O) \right) \right).
+\text{MoE}_{\text{out}} = \text{SiLU}\!\left( \text{GN}\!\left( R_{\text{out}}(O) \right) \right).
 $$
 
 This step stabilizes the feature distribution after the sparse processing and before the subsequent dense phase.
@@ -58,13 +58,13 @@ This step stabilizes the feature distribution after the sparse processing and be
 The third block is a shared convolutional block:
 
 $$
-\operatorname{res}
+\text{res}
 =
-\operatorname{Conv}_{3 \times 3}
+\text{Conv}_{3 \times 3}
 \rightarrow
-\operatorname{GN}
+\text{GN}
 \rightarrow
-\operatorname{SiLU}.
+\text{SiLU}.
 $$
 
 Its role is to locally mix the features produced by the experts. This is important because the patches are processed separately and then reinserted into their original positions: without a local dense operation, discontinuities could emerge between adjacent patches or overly sharp boundaries between regions processed by different experts.
@@ -72,11 +72,11 @@ Its role is to locally mix the features produced by the experts. This is importa
 Finally, the layer applies two residual connections:
 
 $$
-\operatorname{MoE}_{\text{out}} = \operatorname{MoE}_{\text{out}} + \operatorname{res},
+\text{MoE}_{\text{out}} = \text{MoE}_{\text{out}} + \text{res},
 $$
 
 $$
-X_{\text{out}} = R_{\text{out}}(O) + \operatorname{MoE}_{\text{out}}.
+X_{\text{out}} = R_{\text{out}}(O) + \text{MoE}_{\text{out}}.
 $$
 
 The first residual integrates the contribution of the dense convolutional block, while the second maintains a direct connection with the reconstructed feature map after expert processing. In this way, the block combines three components: sparse routing across experts, shared normalization/activation, and dense convolutional post-processing.
@@ -88,17 +88,17 @@ The `Router Gate` is the module that assigns each patch to one of the available 
 $$
 R_{\text{in}} =
 \left[
-\operatorname{mean}(X_p);
-\operatorname{amax}(X_p)
+\text{mean}(X_p);
+\text{amax}(X_p)
 \right],
 $$
 
-where $\operatorname{mean}(X_p)$ and $\operatorname{amax}(X_p)$ are computed along the spatial dimensions of the patch. In this way, each patch is represented by a vector that summarizes both its mean activation and its maximum activation.
+where $\text{mean}(X_p)$ and $\text{amax}(X_p)$ are computed along the spatial dimensions of the patch. In this way, each patch is represented by a vector that summarizes both its mean activation and its maximum activation.
 
 This representation is normalized and passed through a linear layer:
 
 $$
-\ell = W \cdot \operatorname{LN}(R_{\text{in}}) + b,
+\ell = W \cdot \text{LN}(R_{\text{in}}) + b,
 $$
 
 where $\ell \in \mathbb{R}^{N_{\text{exp}}}$. The vector $\ell$ contains one logit for each expert. The `Router Gate` can therefore be seen as a function that, given the representation of a patch, assigns a score to each expert in the pool.
@@ -106,7 +106,7 @@ where $\ell \in \mathbb{R}^{N_{\text{exp}}}$. The vector $\ell$ contains one log
 The logits are then scaled by a temperature $\tau$ and transformed into probabilities through softmax:
 
 $$
-p_{\text{exp}} = \operatorname{softmax}\!\left( \frac{\ell}{\tau} \right).
+p_{\text{exp}} = \text{softmax}\!\left( \frac{\ell}{\tau} \right).
 $$
 
 The temperature controls how uniform or selective the distribution over experts is: higher values of $\tau$ produce softer distributions, while lower values make the logits sharper and push the router toward more distinct choices.
@@ -188,7 +188,7 @@ $$
 and transformed into probabilities via softmax,
 
 $$
-p = \operatorname{softmax}(\tilde{\ell}).
+p = \text{softmax}(\tilde{\ell}).
 $$
 
 The project uses three auxiliary losses on the router: `Load Balancing Loss`, `Z-Loss`, and `Diversity Loss`.
@@ -261,7 +261,7 @@ $$
 where each row represents a patch and each column an expert, the code normalizes the columns of $P$:
 
 $$
-\hat{P} = \operatorname{normalize}(P, \mathrm{dim}=0).
+\hat{P} = \text{normalize}(P, \mathrm{dim}=0).
 $$
 
 It then computes the expert correlation matrix:
@@ -363,7 +363,7 @@ To analyze the router's behavior, it is not sufficient to observe only the model
 The `spec_entropy` measures the average entropy of the probability distribution produced by the router before the Top-1 selection. For each patch, the router produces a distribution over experts:
 
 $$
-p = \operatorname{softmax}\!\left( \frac{\ell}{\tau} \right).
+p = \text{softmax}\!\left( \frac{\ell}{\tau} \right).
 $$
 
 The normalized entropy of the distribution is
