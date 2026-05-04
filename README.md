@@ -64,7 +64,7 @@ Once the distribution over the experts is obtained, a `Top-1` routing is applied
 $$e^* = \arg\max_i \ p_i$$
 
 However, each expert has a maximum capacity, denoted as `capacity`, which limits the number of patches it can process in a single forward pass. The capacity is calculated based on the total number of patches, the number of experts, and the `capacity_factor`:
-$$C_{cap} = \left\lceil \frac{\text{capacity\\_factor} \cdot N}{N_{exp}} \right\rceil$$
+$$C_{cap} = \left\lceil \frac{\text{capacity_factor} \cdot N}{N_{exp}} \right\rceil$$
 where $N$ is the total number of patches/tokens to route. If an expert receives more patches than its capacity, only the patches with the highest routing probability are kept, while the others are dropped from the sparse path.
 
 The dropped patches are not processed by the experts; however, thanks to the residual connection of the MoE block, the original signal of the patch can still be preserved in the layer. The capacity therefore serves to control the computational load of the experts and prevent a single expert from absorbing all the traffic.
