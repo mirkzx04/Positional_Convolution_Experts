@@ -106,11 +106,11 @@ def log_loss_router_moe(PROJECT_PATH, X_AXIS, ROUTER_PTH, api):
     color_idx = 0
 
     metrics_info = {
-        f'{ROUTER_PTH}/entropy_norm_mean': {'title': 'Normalized Entropy', 'ylabel': 'Entropy (0-1)'},
-        f'{ROUTER_PTH}/imbalance_mean': {'title': 'Imbalance Mean (Max/Min)', 'ylabel': 'Ratio'},
         f'{ROUTER_PTH}/drop_rate': {'title': 'Drop Rate', 'ylabel': 'Drop Rate (0-1)'},
-        f'{ROUTER_PTH}/mean_capacity_ratio_mean': {'title': 'Capacity Efficiency', 'ylabel': 'Efficiency Ratio'},
-        f'{ROUTER_PTH}/spec_entropy_mean': {'title': 'Router Spec Entropy', 'ylabel': 'Entropy'}
+        f'{ROUTER_PTH}/multi_assigned_token_rate': {'title': 'Multi-assigned Token Rate', 'ylabel': 'Rate (0-1)'},
+        f'{ROUTER_PTH}/experts_per_processed_token_mean': {'title': 'Experts Per Processed Token', 'ylabel': 'Experts'},
+        f'{ROUTER_PTH}/token_logit_entropy_mean': {'title': 'Token Logit Entropy', 'ylabel': 'Entropy (0-1)'},
+        f'{ROUTER_PTH}/logits_std_mean': {'title': 'Logits Std', 'ylabel': 'Std'}
     }
     
     print(f"Searching runs in: {PROJECT_PATH}...")

@@ -38,30 +38,23 @@ class PatchExtractor(nn.Module):
         # Get coords fourier
         coords_fourier = self.fourier_features(coords)
         patch_pos_feats = torch.cat([coords, coords_fourier], dim = -1)
-        patch_pos_feats = patch_pos_feats.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, self.patch_size, self.patch_size)
+        return patch_pos_feats.unsqueeze(0).expand(B, -1, -1)
 
-        return patch_pos_feats
     def get_coords(self, h_patches, w_patches, B, img_device):
         # Create axis
-        h_coords = torch.linspace(0.0, 1.0, h_patches, device=img_device)
-        w_coords = torch.linspace(0.0, 1.0, w_patches, device= img_device)
+        h_coords = torch.linspace(0.0, 1.0, h_patches, device=img_device, dtype=torch.float32)
+        w_coords = torch.linspace(0.0, 1.0, w_patches, device=img_device, dtype=torch.float32)
+        y_grid, x_grid = torch.meshgrid(h_coords, w_coords, indexing="ij")
+        return torch.stack([x_grid, y_grid], dim=-1).reshape(-1, 2)
 
-        y_grid, x_grid = torch.meshgrid(h_coords, w_coords, indexing='ij')
-
-        coords = torch.stack([x_grid, y_grid], dim = -1) # [h, w, 2]
-        coords = coords.flatten(start_dim=0, end_dim=1) #[num_patches, 2]
- 
-        coords = torch.tensor(coords, dtype=torch.float32, device=img_device)
-        coords = repeat(coords, 'n xy -> b n xy', b = B)
-
-        return coords
-
-    def get_patches(self, image):
+    def get_patches(self, image, unfold_kernel_size, halo):
         """
         Dvides an image in patch and return coordinate (x,y) for every patch
 
         Args :
             image : tensor (B,C, H, W)
+            overla : Int or Bool | Set if use overlapping and how much is overlapping
+            kernel_size : Dimension of kernel 
 
         returns :
             patches : tensor (B, num_patches, C, patch_size x patch_size)
@@ -69,25 +62,30 @@ class PatchExtractor(nn.Module):
         if isinstance(image, np.ndarray):
             image = torch.from_numpy(image)
             
-        coords = []
-        B, _, H, W = image.shape
+        B, C, H, W = image.shape
 
         # Applied padding
         pad_h = (self.patch_size - (H % self.patch_size)) % self.patch_size
         pad_w = (self.patch_size - (W % self.patch_size)) % self.patch_size
-        image = F.pad(image, (0, pad_w, 0, pad_h), mode='constant', value=0)
+        image = F.pad(
+            image, 
+            (halo, halo + pad_w, halo, halo + pad_h), 
+            mode='constant', value=0
+        )
 
-        H += pad_h
-        W += pad_w
+        # Extract patches with overlaps
+        patches = image.unfold(2, unfold_kernel_size, self.patch_size).unfold(
+            3, unfold_kernel_size, self.patch_size
+        )
+        h_patches = patches.shape[2]
+        w_patches = patches.shape[3]
 
-        # Extract patch
-        patches = rearrange(image,
-                    'b c (h p1) (w p2) -> b (h w) c p1 p2',
-                    p1=self.patch_size, p2=self.patch_size)
-        patches = patches.to(image.device)
+        patches = patches.permute(0,2,3,1,4,5).reshape(
+            B,
+            h_patches * w_patches,
+            C,
+            unfold_kernel_size,
+            unfold_kernel_size,
+        )
 
-        h_patches = H // self.patch_size
-        w_patches = W // self.patch_size
-        
-        # return h_patches, w_patches, patch_pos_feats, patches
         return h_patches, w_patches, patches
