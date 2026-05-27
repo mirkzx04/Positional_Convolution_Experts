@@ -30,13 +30,12 @@ class EMADiffLitModule(pl.LightningModule):
                 device,
                 train_epochs,
                 uniform_epochs,
-                alpha_init,
-                alpha_final,
-                alpha_epochs,
                 temp_init,
                 temp_mid,
                 temp_final,
                 temp_epochs,
+                covarage_init,
+                covarage_final,
             ):
         
         """
@@ -65,21 +64,19 @@ class EMADiffLitModule(pl.LightningModule):
         self.router_lr = router_lr
         self.weight_decay = weight_decay
 
-        # Router hyperparameters for scheduling
-        self.alpha_init = alpha_init # Load balancinc wheigth
-        self.alpha_final = alpha_final
-        self.alpha_epochs = alpha_epochs
-
         self.temp_init = temp_init # Logits router temperature
         self.temp_mid = temp_mid
         self.temp_final = temp_final
         self.temp_epochs = temp_epochs
         self.num_classes = num_classes
 
+        self.covarage_init = covarage_init
+        self.covarage_final = covarage_final
+
         self.router_mul = 2.0
         self.warmup_backbone = 15
         self.router_start_epoch = uniform_epochs
-        self.router_warmup = 5
+        self.router_warmup = 10
         self.use_augmentation = True
         
         self.train_epochs = train_epochs
@@ -97,18 +94,20 @@ class EMADiffLitModule(pl.LightningModule):
 
         self.gradient_norm_router = []
         self.gradient_norm_backbone = []
+        self.last_conv_grad_norm_sum_layers = []
+        self.last_conv_grad_norm_count_layers = []
 
         # Best validation loss
         self.best_val_loss = float('+inf')
-
-        self.aux_loss_weight = 0.0
 
         self.use_mixup_cutmix = True
         self.mixup_alpha      = 0.2   
         self.cutmix_alpha     = 1.0
         self.cutmix_prob      = 0.3
 
-        self.div_loss_weight = 0.01
+        self.div_loss_weight = 0.03
+        self.z_loss_weigth = 0.0
+        self.cov_loss_weight = 0.0
 
         # Accuracy metrics
         self.accuracy_metrics = {
@@ -121,6 +120,7 @@ class EMADiffLitModule(pl.LightningModule):
         # Loss function
         self.val_loss = torch.nn.CrossEntropyLoss()
         self.train_loss = torch.nn.CrossEntropyLoss(label_smoothing=0.10) # M
+        self._reset_last_conv_grad_metrics()
 
 
     def forward(self, x, force_specialized = False):
@@ -158,7 +158,7 @@ class EMADiffLitModule(pl.LightningModule):
                 # Mixup
                 data, targets_a, targets_b, lam = self._mixup_batch(data, labels)
 
-            logits, z_loss, imb_loss, div_loss = self(data)
+            logits, cov_loss, z_loss, div_loss = self(data)
 
             # Loss = lam * CE(logits, y_a) + (1-lam) * CE(logits, y_b)
             class_loss = (
@@ -167,10 +167,10 @@ class EMADiffLitModule(pl.LightningModule):
             )
 
         else:
-            logits, z_loss, imb_loss, div_loss = self(data)
+            logits, cov_loss, z_loss, div_loss = self(data)
             class_loss = self.train_loss(logits, labels)
         
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * self.z_loss_weigth) + (self.div_loss_weight * div_loss) 
+        aux_loss = (cov_loss * self.cov_loss_weight) + (z_loss * self.z_loss_weigth) + (self.div_loss_weight * div_loss) 
         total_loss = class_loss + aux_loss
 
         self.train_class_losses.append(class_loss.item())
@@ -207,6 +207,7 @@ class EMADiffLitModule(pl.LightningModule):
         
         self.gradient_norm_router.append(total_norm_router ** 0.5)
         self.gradient_norm_backbone.append(total_norm_backbone ** 0.5)
+        self._update_last_conv_grad_metrics()
 
         torch.nn.utils.clip_grad_norm_(self.router_params, max_norm=0.5)
         torch.nn.utils.clip_grad_norm_(self.backbone_params, max_norm=1.5)
@@ -217,18 +218,17 @@ class EMADiffLitModule(pl.LightningModule):
 
         with torch.no_grad():
             self.model.moe_aggregator.reset()
+        self._reset_last_conv_grad_metrics()
             
 
         e = self.current_epoch
         if e < self.uniform_epochs:
-            self.aux_loss_weight = 0
-            self.z_loss_weigth = 0
             self._freeze_router()
 
         elif e >= self.router_start_epoch:
             self._unfreeze_router()
-            self.aux_loss_weight = self.alpha_scheduler()
-            self.z_loss_weigth = 1e-4
+            self.z_loss_weigth = 1e-3
+            self.cov_loss_weight = self.covarage_scheduler()
             self.model.router.router_temp = self.temp_scheduler()
             self.model.router.noise_std = self.noise_scheduler()
 
@@ -253,57 +253,66 @@ class EMADiffLitModule(pl.LightningModule):
 
         return float(self.temp_final)
 
-    def alpha_scheduler(self):
-        e  = int(self.current_epoch)
-        rs = int(self.router_start_epoch)
+    def noise_scheduler(self):
+        e = int(self.current_epoch)
+        rs    = int(self.router_start_epoch)
         rw = int(self.router_warmup)
-        T  = int(self.train_epochs)
+        T     = int(self.train_epochs)
 
-        a_peak  = float(self.alpha_init)
-        a_final = float(self.alpha_final)
+        t_start = rs + rw 
+        t_end = min(t_start + int(self.temp_epochs), T)
 
-        # Router non attivo: nessuna aux loss
+        noise_max = 0.02
+        noise_final = 0.0
+
+        # Prima che il router sia attivo: niente rumore
         if e < rs:
             return 0.0
 
-        # Warmup: 0 -> a_peak
-        if e < rs + rw:
-            pct = (e - rs + 1) / float(max(1, rw))
-            return a_peak * pct
-
-        # Plateau a a_peak finché il router esplora a LR pieno
-        t1_alpha = rs + int(0.4 * (T - rs))  # ~40% della parte post-router
-        if e < t1_alpha:
-            return a_peak
-
-        # Decadimento coseno a_peak -> a_final da t1_alpha a T
-        progress   = (e - t1_alpha) / float(max(1, T - t1_alpha))
-        progress   = min(max(progress, 0.0), 1.0)
-        cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-        return a_final + (a_peak - a_final) * cosine_dec
-
-    def noise_scheduler(self):
-        epoch = int(self.current_epoch)
-        rs    = int(self.router_start_epoch)
-        T     = int(self.train_epochs)
-
-        noise_max = 0.05
-        noise_min = 0.0
-
-        # Prima che il router sia attivo: niente rumore
-        if epoch < rs:
-            return 0.0
-
         # Plateau di esplorazione ad alto rumore
-        t1_noise = rs + int(0.3 * (T - rs))  # ~30% della parte post-router
-        if epoch < t1_noise:
+        if e < t_start:
             return noise_max
 
-        # Decadimento coseno noise_max -> noise_min
-        progress   = (epoch - t1_noise) / float(max(1, T - t1_noise))
-        progress   = min(max(progress, 0.0), 1.0)
-        cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
-        return noise_min + (noise_max - noise_min) * cosine_dec
+        if e < t_end :
+            progress = (e - t_start) / float(max(1, t_end - t_start))
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))  # 1 -> 0
+            return noise_final + (noise_max - noise_final) * cosine_dec
+        
+        return noise_final
+
+
+    def covarage_scheduler(self):
+        e = int(self.current_epoch)
+        rs = int(self.router_start_epoch)
+        rw = int(self.router_warmup)
+        T = int(self.train_epochs)
+
+        c_init = float(self.covarage_init)   # es. 1e-2
+        c_final = float(self.covarage_final) # es. 1e-3
+
+        if e < rs:
+            return 0.0
+
+        warmup_end = min(rs + rw, T)
+        actual_warmup = max(1, warmup_end - rs)
+
+        # warmup: 0 -> c_init
+        if e < warmup_end:
+            progress = (e - rs + 1) / float(actual_warmup)
+            progress = min(max(progress, 0.0), 1.0)
+            return c_init * progress
+
+        if warmup_end >= T - 1:
+            return c_final
+
+        # decay: c_init -> c_final
+        decay_steps = max(1, T - warmup_end - 1)
+        progress = (e - warmup_end) / float(decay_steps)
+        progress = min(max(progress, 0.0), 1.0)
+
+        cosine_dec = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return c_final + (c_init - c_final) * cosine_dec
     #----- SCHEDULERS -----
 
     def on_train_epoch_end(self):
@@ -325,7 +334,6 @@ class EMADiffLitModule(pl.LightningModule):
             'LR_Router' : self.optimizer.param_groups[2]['lr'],
             'Gradient norm backbone' : torch.tensor(self.gradient_norm_backbone).mean().item(),
             'Gradient norm router' : torch.tensor(self.gradient_norm_router).mean().item(),
-            'alpha_loss' : torch.tensor(self.aux_loss_weight),
             'temp_logits' : torch.tensor(self.model.router.router_temp),
         }
 
@@ -335,9 +343,8 @@ class EMADiffLitModule(pl.LightningModule):
         self.gradient_norm_router.clear()
         self.gradient_norm_backbone.clear()
 
-        with torch.no_grad():
-            router_metrics = self.model.moe_aggregator.finalize()
-        log_dict.update({f'router-train/{k}' : v for k, v in router_metrics.items()})
+        log_dict.update(self._collect_router_metrics('router-train'))
+        log_dict.update(self._collect_last_conv_metrics('router-train'))
 
         self.log_dict(log_dict, prog_bar=True, logger=True, on_step=False, on_epoch=True)
 
@@ -355,11 +362,11 @@ class EMADiffLitModule(pl.LightningModule):
         data, labels = batch
         data, labels = data.to(self.device), labels.to(self.device)
         
-        logits, z_loss, imb_loss, div_loss = self(data)
+        logits, cov_loss, z_loss, div_loss = self(data)
 
         class_loss = self.val_loss(logits, labels)
 
-        aux_loss = (imb_loss * self.aux_loss_weight) + (z_loss * self.z_loss_weigth) + (self.div_loss_weight * div_loss) 
+        aux_loss = (cov_loss * self.cov_loss_weight) + (z_loss * self.z_loss_weigth) + (self.div_loss_weight * div_loss) 
         total_loss = class_loss + aux_loss   
 
         self.val_class_losses.append(class_loss.item())
@@ -399,11 +406,74 @@ class EMADiffLitModule(pl.LightningModule):
         self.val_aux_losses.clear()
         self.val_total_losses.clear()
 
-        with torch.no_grad():
-            router_metrics = self.model.moe_aggregator.finalize()
-        log_dict.update({f'router-val/{k}' : v for k, v in router_metrics.items()})
+        log_dict.update(self._collect_router_metrics('router-val'))
 
         self.log_dict(log_dict, prog_bar=True, logger=True, on_step=False, on_epoch=True)
+
+    def _collect_router_metrics(self, prefix: str):
+        with torch.no_grad():
+            router_metrics = self.model.moe_aggregator.finalize()
+
+        log_dict = {}
+        for key, value in router_metrics.items():
+            if isinstance(value, torch.Tensor):
+                value = value.item()
+            log_dict[f'{prefix}/{key}'] = float(value)
+        return log_dict
+
+    def _iter_moe_layers(self):
+        moe_layer_idx = 0
+        for layer in self.model.layers:
+            if isinstance(layer, DownsampleResBlock):
+                continue
+            yield moe_layer_idx, layer
+            moe_layer_idx += 1
+
+    def _reset_last_conv_grad_metrics(self):
+        num_moe_layers = sum(
+            0 if isinstance(layer, DownsampleResBlock) else 1
+            for layer in self.model.layers
+        )
+        self.last_conv_grad_norm_sum_layers = [0.0 for _ in range(num_moe_layers)]
+        self.last_conv_grad_norm_count_layers = [0 for _ in range(num_moe_layers)]
+
+    def _update_last_conv_grad_metrics(self):
+        for moe_layer_idx, layer in self._iter_moe_layers():
+            grad_norms = []
+            for expert in layer.experts:
+                grad = expert.last_conv.weight.grad
+                grad_norms.append(0.0 if grad is None else float(grad.detach().norm(2).item()))
+
+            if grad_norms:
+                self.last_conv_grad_norm_sum_layers[moe_layer_idx] += (
+                    sum(grad_norms) / len(grad_norms)
+                )
+                self.last_conv_grad_norm_count_layers[moe_layer_idx] += 1
+
+    def _collect_last_conv_metrics(self, prefix: str):
+        log_dict = {}
+
+        with torch.no_grad():
+            for moe_layer_idx, layer in self._iter_moe_layers():
+                weight_norms = [
+                    float(expert.last_conv.weight.detach().norm(2).item())
+                    for expert in layer.experts
+                ]
+                mean_weight_norm = sum(weight_norms) / max(1, len(weight_norms))
+                log_dict[
+                    f'{prefix}/moe_layer_{moe_layer_idx}/last_conv_weight_norm'
+                ] = float(mean_weight_norm)
+
+                grad_steps = self.last_conv_grad_norm_count_layers[moe_layer_idx]
+                mean_grad_norm = (
+                    self.last_conv_grad_norm_sum_layers[moe_layer_idx] / grad_steps
+                    if grad_steps > 0 else 0.0
+                )
+                log_dict[
+                    f'{prefix}/moe_layer_{moe_layer_idx}/last_conv_grad_norm'
+                ] = float(mean_grad_norm)
+
+        return log_dict
 
     def configure_optimizers(self):
 

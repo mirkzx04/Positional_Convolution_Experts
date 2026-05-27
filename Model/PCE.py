@@ -20,6 +20,7 @@ class PCENetwork(nn.Module):
                     router_temp,
                     capacity_factor_train,
                     capacity_factor_val,
+                    halo_for_patches,
                  ):
         super().__init__()
 
@@ -45,7 +46,8 @@ class PCENetwork(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        
+        self.halo_for_patches = halo_for_patches
+
         last_channel = self.create_layers(
             num_experts=num_experts,
             layer_number=layer_number,
@@ -96,8 +98,10 @@ class PCENetwork(nn.Module):
         
         # Setting start parameters
         patch_size = self.patch_extractor.patch_size
+        unfold_kernel_size = patch_size + 2 * self.halo_for_patches
+
         fourier_freq = self.patch_extractor.num_frequencies
-        fourier_channel = get_fourie_channel(fourier_freq)
+        fourier_channel =  get_fourie_channel(fourier_freq)
         inpt_channel = 64
         out_channel = 64
 
@@ -114,6 +118,8 @@ class PCENetwork(nn.Module):
                 out_channel = transition_out
 
                 patch_size = max(2, patch_size // 2)
+                unfold_kernel_size = patch_size + 2 * self.halo_for_patches
+
             else:
                 self.layers.append(PCELayer(
                     inpt_channel=inpt_channel,
@@ -123,10 +129,16 @@ class PCENetwork(nn.Module):
                     fourie_freq=fourier_freq,
                     gate_channel=current_gate_channel,
                     kernel_size = 3,
-                    downsampling=False
+                    unfold_kernel_size = unfold_kernel_size
                 ))
                 
         return out_channel
+
+    def crop_center(self, y, patch_size):
+        h = self.halo_for_patches
+        if h == 0:
+            return y
+        return y[:, :, h:h + patch_size, h:h + patch_size]
 
     def forward(self, X, current_epoch=None):
         """
@@ -153,99 +165,123 @@ class PCENetwork(nn.Module):
             logits (torch.tensor) : tensor beatches (B, num_classes)
         """
         tot_z_loss = 0.0
-        tot_imb_loss = 0.0
         tot_div_loss = 0.0
+        tot_cov_loss = 0.0
 
         img_device = X.device
         B = X.shape[0]
+
+        moe_layers = 0
 
         X = self.stem(X)
         for layer_idx, layer in enumerate(self.layers):
             if isinstance(layer, DownsampleResBlock):
                 X = layer(X)
             else :
+                moe_layers += 1
+
                 # Store layer attributes for cleaner access
                 experts = layer.experts
                 merge_gn = layer.merge_gn
                 merge_act = layer.activation_merge
                 gamma = layer.gamma
                 post_block = layer.post_block
+                unfold_kernel_size = layer.unfold_kernel_size
                 
                 # Extract patches from the current feature map
                 patch_size = layer.patch_size
                 self.patch_extractor.patch_size = patch_size
 
                 # Get token from X patches
-                h_patches, w_patches, X_patches = self.patch_extractor.get_patches(X)
+                h_patches, w_patches, X_patches = self.patch_extractor.get_patches(
+                    image=X,
+                    unfold_kernel_size = unfold_kernel_size, 
+                    halo = self.halo_for_patches
+                )
                 P, C, H, W = X_patches.shape[1:] # Shape : [B, P, C, H, W]
                 N = B*P 
 
                 X_tokens = X_patches.reshape(B * P, C, H, W)
                 
                 # Get positional features from fourier
-                positional_features = self.patch_extractor.get_positional(h_patches, w_patches, B, img_device)
+                positional_features = self.patch_extractor.get_positional(
+                    h_patches=h_patches, 
+                    w_patches=w_patches, 
+                    B=B, 
+                    img_device=img_device, 
+                )
                 positional_features = positional_features.flatten(0, 1)
-
-                # tokens enriched with positional features 
-                X_positional = torch.cat([X_tokens, positional_features], dim = 1)
                 
                 # Route patches to experts and compute auxiliary losses
-                dispatch, combine, z_loss, imb_loss, div_loss, logits_std, logits = self.router(
-                    X_positional, 
+                routing_state, cov_loss, z_loss, div_loss, logits_std, logits_temp_std, logits = self.router(
+                    X_tokens, 
                     layer.router_gate, 
+                    positional_features,
                     current_epoch,
                 )
 
-                # Update aggregator statistics without gradients
-                with torch.no_grad():
-                    self.moe_aggregator.update_layer(
-                        layer_idx, 
-                        dispatch.detach(), 
-                        combine.detach(), 
-                        logits_std,
-                        logits.detach()
-                    )
+                token_idx = routing_state.token_idx
+                expert_idx = routing_state.expert_idx
+                weights = routing_state.weights.to(dtype = X_tokens.dtype)
 
-                E, Ccap = dispatch.shape[1], dispatch.shape[2]
+                order = torch.argsort(expert_idx)
+                token_idx = token_idx.index_select(0, order)
+                expert_idx = expert_idx.index_select(0, order)
+                weights = weights.index_select(0, order)
 
-                # Extract routing indices for scatter operation
-                n_idx, e_idx, c_idx = self._indices_from_dispatch(dispatch)
+                E = len(experts)
+                counts = torch.bincount(expert_idx, minlength=E)
+
+                per_exp_token_idx = [None] * E
+                per_exp_weights = [None] * E
+                offset = 0
+                for e, count in enumerate(counts.tolist()):
+                    if count == 0:
+                        continue
+                    next_offset = offset + count
+                    per_exp_token_idx[e] = token_idx[offset:next_offset]
+                    per_exp_weights[e] = weights[offset:next_offset].view(-1, 1, 1, 1)
+                    offset = next_offset
                 
-                # Distribute patches to their assigned expert slots
-                if n_idx.numel() == 0:
-                    X = X  # no-op, per chiarezza
-                    continue
-                
-                # Process each expert independently on its assigned patches
-                outputs = None
-                per_exp_token_idx = [None] * E  # n_idx for each experts 
-                per_exp_slot_idx  = [None] * E  # c_idx correspondents
-                for e in range(E):
-                    mask_e = (e_idx == e)
-                    if mask_e.any():
-                        per_exp_token_idx[e] = n_idx[mask_e]
-                        per_exp_slot_idx[e]  = c_idx[mask_e]
+                X_center = self.crop_center(X_tokens, patch_size)
+                outputs = X_center.clone()
+                rel_delta_sum = 0.0
+                rel_delta_count = 0
+                rel_delta_eps = 1e-8
 
-                # Process only experts with tokens
                 for e, expert in enumerate(experts):
                     n_e = per_exp_token_idx[e]
                     if n_e is None:
                         continue
 
-                    # Tokens for experts e
-                    x_e = X_tokens[n_e]  # [Ne, C, H, W]
-                    y_e = expert(x_e)    # [Ne, C_out, H_out, W_out]
-                    if outputs is None:
-                        _, C_out, H_out, W_out = y_e.shape
-                        outputs = X_tokens.new_zeros((N, C_out, H_out, W_out))
-                    c_e = per_exp_slot_idx[e]                                  # [Ne]
-                    w_e = combine[n_e, e, c_e].to(dtype=y_e.dtype).view(-1, 1, 1, 1)  # [Ne,1,1,1]
+                    x_e = X_tokens.index_select(0, n_e)
+                    x_e_center = self.crop_center(x_e, patch_size)
 
-                    contrib = y_e * w_e  # [Ne, C_out, H_out, W_out]
+                    y_e = expert(x_e)
+                    y_e = self.crop_center(y_e, patch_size)
+
+                    delta_e = y_e - x_e_center
+                    with torch.no_grad():
+                        rel_delta = delta_e.detach().flatten(1).norm(dim=1) / (
+                            x_e_center.detach().flatten(1).norm(dim=1) + rel_delta_eps
+                        )
+                        rel_delta_sum += float(rel_delta.sum().item())
+                        rel_delta_count += int(rel_delta.numel())
+                    contrib = delta_e * per_exp_weights[e].to(dtype=y_e.dtype)
                     outputs.index_add_(0, n_e, contrib)
-                
-                outputs = X_tokens + gamma * outputs
-                
+
+                with torch.no_grad():
+                    self.moe_aggregator.update_layer(
+                        layer_idx=layer_idx,
+                        token_idx=routing_state.token_idx.detach(),
+                        num_tokens=routing_state.num_tokens,
+                        logits_std=logits_std,
+                        logits_temp_std=logits_temp_std,
+                        logits=logits.detach(),
+                        rel_delta_sum=rel_delta_sum,
+                        rel_delta_count=rel_delta_count,
+                    )
+
                 # Reassemble patches back into spatial feature map
                 _, C_out, H_out, W_out = outputs.shape
 
@@ -255,24 +291,27 @@ class PCENetwork(nn.Module):
                     h=h_patches, w=w_patches
                 )
 
+                # Dense and residual block
                 moe_out = merge_gn(X)
                 moe_out = merge_act(moe_out)
-
                 res = post_block(moe_out)
                 moe_out = moe_out + res
-
                 X = X + moe_out
 
                 tot_z_loss += z_loss
-                tot_imb_loss += imb_loss
                 tot_div_loss += div_loss
+                tot_cov_loss += cov_loss
 
         # Apply global pooling and prediction head
         x = self.pooler(X) 
         x = self.flatten(x) 
         logits = self.prediction_head(x) 
         
-        return logits, tot_z_loss, tot_imb_loss, tot_div_loss
+        tot_z_loss /= moe_layers
+        tot_div_loss /= moe_layers
+        tot_cov_loss /= moe_layers
+
+        return logits, tot_cov_loss, tot_z_loss, tot_div_loss
 
 
     def _indices_from_dispatch(self, dispatch):

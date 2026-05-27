@@ -4,7 +4,7 @@ import torch.functional as F
 from torch import nn as  nn
 # import timmù
 class ConvExpert(nn.Module):
-    def __init__(self, in_channel, out_channel, use_residual=True, downsampling = False, kernel_size = 3):
+    def __init__(self, in_channel, out_channel, use_residual=True, kernel_size = 3):
         super().__init__()
         """
         Constructor of one convolution expert
@@ -23,8 +23,16 @@ class ConvExpert(nn.Module):
         self.kernel_size = kernel_size
         self.final_act = nn.SiLU(inplace=True)
 
-        stride = 2 if downsampling else 1
         padding = kernel_size // 2
+        stride = 1
+
+        self.last_conv = nn.Conv2d(
+            in_channels=self.hidden_size,
+            out_channels=out_channel,
+            kernel_size=self.kernel_size,
+            padding=padding,
+            bias=False
+        )
 
         # Define experts operation
         self.conv_block = nn.Sequential(
@@ -38,13 +46,7 @@ class ConvExpert(nn.Module):
             ),
             nn.GroupNorm(num_groups=min(8, self.hidden_size), num_channels=self.hidden_size),
             nn.SiLU(inplace=True),
-            nn.Conv2d(
-                in_channels=self.hidden_size,
-                out_channels=out_channel,
-                kernel_size=self.kernel_size,
-                padding=padding,
-                bias=False
-            ),
+            self.last_conv,
             nn.GroupNorm(num_groups=min(8, out_channel), num_channels=out_channel),
         )
 
@@ -62,6 +64,10 @@ class ConvExpert(nn.Module):
                 ) 
             else : 
                 self.skip = nn.Identity()
+
+        last_conv = self.conv_block[3]
+        nn.init.zeros_(last_conv.weight)
+
     def forward(self, X):
         out = self.conv_block(X)
         if self.use_residual:

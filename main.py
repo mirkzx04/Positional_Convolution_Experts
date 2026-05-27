@@ -82,26 +82,25 @@ if __name__ == "__main__":
     layer_number = 8
     patch_size = 16
     lr = 0.001
-    router_lr = 0.001
+    router_lr = 1e-4
     weight_decay = 1e-3 # M
 
     # Hyperparameters of router
-    capacity_factor_train = 2.0
-    capacity_factor_val = 2.0
+    capacity_factor_train = 2.00
+    capacity_factor_val = 2.00
+    halo_for_patches = 2
 
-    alpha_init = 0.05
-    alpha_final = 5e-4 # M
-    alpha_epochs =  10
-
-    temp_init = 2.0
+    temp_init = 1.75
     temp_mid = 1.2
-    temp_final = 0.85
-    temp_epochs = 120
-
+    temp_final = 0.75
+    temp_epochs = 25
+    
+    covarage_init = 1e-3
+    covarage_final = 1e-4
     # Training metrics
     train_epochs = 150
     uniform_epochs = 10
-    batch_size = 128
+    batch_size = 64
 
     tiny_set = get_tinyimagenet_sets(batch_size)
     train_loader = tiny_set['dataloaders']['train']
@@ -113,7 +112,7 @@ if __name__ == "__main__":
 
     print(f'--- Dataset loaded --- \n')
 
-    run_name = f"test {num_exp} experts - post_block-KS=1"
+    run_name = f"test {num_exp} experts - Patching-Overlap  | Expert -> Token | scaled z_loss"
 
     # Defines checkpointer and Logger
     logger = WandbLogger(
@@ -139,14 +138,15 @@ if __name__ == "__main__":
         router_temp=temp_init,
         capacity_factor_train = capacity_factor_train,
         capacity_factor_val = capacity_factor_val,
+        halo_for_patches=halo_for_patches,
         )
     # pce = torch.compile(pce, mode="reduce-overhead")
 
     lit_module = EMADiffLitModule(
         pce=pce, lr=lr, weight_decay=weight_decay, device=device, train_epochs=train_epochs, 
-        uniform_epochs=uniform_epochs, alpha_init=alpha_init,  alpha_final=alpha_final, 
-        alpha_epochs=alpha_epochs, temp_init=temp_init, temp_mid = temp_mid, 
-        temp_final=temp_final,temp_epochs=temp_epochs, num_classes=num_classes, router_lr = router_lr
+        uniform_epochs=uniform_epochs, temp_init=temp_init, temp_mid = temp_mid, 
+        temp_final=temp_final,temp_epochs=temp_epochs, num_classes=num_classes, router_lr = router_lr,
+        covarage_final=covarage_final, covarage_init=covarage_init
     )
     trainer = pl.Trainer(
         max_epochs=train_epochs,
@@ -156,6 +156,7 @@ if __name__ == "__main__":
         enable_checkpointing= True,
         callbacks=[checkpoint_callback],
         num_sanity_val_steps=0,
+        accumulate_grad_batches=2,
     )
 
     print(f'--- Start training --- \n')
