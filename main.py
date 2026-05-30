@@ -86,8 +86,8 @@ if __name__ == "__main__":
     weight_decay = 1e-3 # M
 
     # Hyperparameters of router
-    capacity_factor_train = 2.00
-    capacity_factor_val = 2.00
+    capacity_factor_train = 1.00
+    capacity_factor_val = 1.00
     halo_for_patches = 2
 
     temp_init = 1.75
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     covarage_init = 1e-3
     covarage_final = 1e-4
     # Training metrics
-    train_epochs = 150
+    train_epochs = 80
     uniform_epochs = 10
     batch_size = 64
 
@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     print(f'--- Dataset loaded --- \n')
 
-    run_name = f"test {num_exp} experts - Patching-Overlap  | Expert -> Token | scaled z_loss"
+    run_name = f"test {num_exp} experts - Patching-Overlap  | Expert -> Token | cov loss"
 
     # Defines checkpointer and Logger
     logger = WandbLogger(

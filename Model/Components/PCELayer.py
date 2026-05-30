@@ -13,7 +13,6 @@ class PCELayer(nn.Module):
                 patch_size,
                 fourie_freq,
                 gate_channel,
-                # downsampling,
                 kernel_size,
                 unfold_kernel_size,
                 ):

@@ -10,6 +10,7 @@ from Model.Components.DownsampleResBlock import DownsampleResBlock
 from Model.Components.MoEAggregator import MoEAggregator
 from Datasets_Classes.PatchExtractor import PatchExtractor
 from Model.Components.Router.Router import Router
+from Testing.dataclass.DebuggerDataClass import RoutingDebug 
 
 class PCENetwork(nn.Module):
     def __init__(self, 
@@ -140,7 +141,7 @@ class PCENetwork(nn.Module):
             return y
         return y[:, :, h:h + patch_size, h:h + patch_size]
 
-    def forward(self, X, current_epoch=None):
+    def forward(self, X, current_epoch=None, collect_routes = False):
         """
         Forward method of PCE Network
 
@@ -164,12 +165,14 @@ class PCENetwork(nn.Module):
         Returns:
             logits (torch.tensor) : tensor beatches (B, num_classes)
         """
-        tot_z_loss = 0.0
-        tot_div_loss = 0.0
-        tot_cov_loss = 0.0
+        tot_z_loss = []
+        tot_div_loss = []
+        tot_overlap_loss = []
+        tot_balance_loss= []
 
         img_device = X.device
         B = X.shape[0]
+        routing_debug = []
 
         moe_layers = 0
 
@@ -213,12 +216,27 @@ class PCENetwork(nn.Module):
                 positional_features = positional_features.flatten(0, 1)
                 
                 # Route patches to experts and compute auxiliary losses
-                routing_state, cov_loss, z_loss, div_loss, logits_std, logits_temp_std, logits = self.router(
+                routing_state, overlap_loss, balance_loss, z_loss, div_loss, logits_std, logits_temp_std, logits = self.router(
                     X_tokens, 
                     layer.router_gate, 
                     positional_features,
                     current_epoch,
                 )
+
+                if collect_routes:
+                    routing_debug.append(
+                        RoutingDebug(
+                            layer_idx=layer_idx, 
+                            B = B,
+                            E = len(experts), 
+                            h_patches=h_patches,
+                            w_patches=w_patches,
+                            token_idx=routing_state.token_idx.detach().cpu(),
+                            experts_idx=routing_state.expert_idx.detach().cpu(),
+                            weight = routing_state.weights.detach().cpu(),
+                            logits = logits.detach().cpu()
+                        )
+                    )
 
                 token_idx = routing_state.token_idx
                 expert_idx = routing_state.expert_idx
@@ -278,6 +296,8 @@ class PCENetwork(nn.Module):
                         logits_std=logits_std,
                         logits_temp_std=logits_temp_std,
                         logits=logits.detach(),
+                        expert_idx=routing_state.expert_idx.detach(),
+                        weights=routing_state.weights.detach(),
                         rel_delta_sum=rel_delta_sum,
                         rel_delta_count=rel_delta_count,
                     )
@@ -290,28 +310,58 @@ class PCENetwork(nn.Module):
                     'b (h w) c ph pw -> b c (h ph) (w pw)',
                     h=h_patches, w=w_patches
                 )
+                X_sparse = X
 
                 # Dense and residual block
-                moe_out = merge_gn(X)
-                moe_out = merge_act(moe_out)
-                res = post_block(moe_out)
-                moe_out = moe_out + res
+                moe_out_pre_post = merge_gn(X)
+                moe_out_pre_post = merge_act(moe_out_pre_post)
+                res = post_block(moe_out_pre_post)
+                moe_out = moe_out_pre_post + res
                 X = X + moe_out
 
-                tot_z_loss += z_loss
-                tot_div_loss += div_loss
-                tot_cov_loss += cov_loss
+                with torch.no_grad():
+                    dense_eps = 1e-8
+                    sparse_norm = X_sparse.detach().flatten(1).norm(dim=1).mean()
+                    pre_post_norm = moe_out_pre_post.detach().flatten(1).norm(dim=1).mean()
+                    dense_rel_delta = (
+                        moe_out.detach().flatten(1).norm(dim=1).mean()
+                        / (sparse_norm + dense_eps)
+                    )
+                    post_res_frac = (
+                        res.detach().flatten(1).norm(dim=1).mean()
+                        / (pre_post_norm + dense_eps)
+                    )
+                    final_rel_delta = (
+                        (X.detach() - X_sparse.detach()).flatten(1).norm(dim=1).mean()
+                        / (sparse_norm + dense_eps)
+                    )
+                    self.moe_aggregator.update_dense_layer(
+                        layer_idx=layer_idx,
+                        dense_rel_delta=float(dense_rel_delta.item()),
+                        post_res_frac=float(post_res_frac.item()),
+                        final_rel_delta=float(final_rel_delta.item()),
+                        device=X.device,
+                    )
+
+                tot_z_loss.append(z_loss)
+                tot_balance_loss.append(balance_loss)
+                tot_div_loss.append(div_loss)
+                tot_overlap_loss.append(overlap_loss)
 
         # Apply global pooling and prediction head
         x = self.pooler(X) 
         x = self.flatten(x) 
         logits = self.prediction_head(x) 
         
-        tot_z_loss /= moe_layers
-        tot_div_loss /= moe_layers
-        tot_cov_loss /= moe_layers
+        tot_z_loss = torch.stack(tot_z_loss).mean()
+        tot_div_loss = torch.stack(tot_div_loss).mean()
+        tot_overlap_loss = torch.stack(tot_overlap_loss).mean() + 0.5 * torch.stack(tot_overlap_loss).max()
+        tot_balance_loss = torch.stack(tot_balance_loss).mean() + 0.5 * torch.stack(tot_balance_loss).max()
 
-        return logits, tot_cov_loss, tot_z_loss, tot_div_loss
+        if collect_routes:
+            return logits, tot_overlap_loss, tot_balance_loss, tot_z_loss, tot_div_loss, routing_debug
+
+        return logits, tot_overlap_loss, tot_balance_loss, tot_z_loss, tot_div_loss
 
 
     def _indices_from_dispatch(self, dispatch):

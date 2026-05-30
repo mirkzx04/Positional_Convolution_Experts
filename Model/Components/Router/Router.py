@@ -82,10 +82,9 @@ class Router(nn.Module):
         logits_temp_std = logits_temp.detach().std().item()
         logits_temp = logits_temp.clamp(min = -10.0, max = 10.0)
 
-        
         # Route based on current phase (Uniform < 30 epochs, Specialized >= 30 epochs)
         if current_epoch == None:
-            return self._specialized_routing(X, logits_temp, logits_std, logits_temp_std)
+            return self._specialized_routing(X, logits_temp, logits_std, logits_temp_std, z_loss)
         if current_epoch < 10:
             return self._uniform_routing(X, logits_temp, logits_std, logits_temp_std)
         else:
@@ -108,7 +107,6 @@ class Router(nn.Module):
         
         probs_e2t = F.softmax(logits.float(), dim = -1) # [N, E]
         div_loss = self.diverity_loss(probs_e2t)
-        cov_loss = self.covarage_loss(probs_e2t)
 
         # Calculate capacity per expert (must be an integer)
         cap_factor = self.capacity_factor_train if self.training else self.capacity_factor_eval
@@ -129,6 +127,15 @@ class Router(nn.Module):
         slot_idx = torch.arange(k, device=X.device).unsqueeze(1).expand(k, E).reshape(-1)
 
         weights = topk_prob.reshape(-1).float()
+        overlap_loss = self.compute_overlap_loss(
+            probs_e2t = probs_e2t,
+            topk_idx = topk_idx, 
+            k = k
+        )
+        balance_loss = self.compute_balance_loss(
+            probs_e2t=probs_e2t, 
+            topk_idx=topk_idx
+        ) 
 
         routing_state = RoutingState(
             token_idx=token_idx,
@@ -140,7 +147,7 @@ class Router(nn.Module):
             capacity=k
         )
 
-        return routing_state, cov_loss, z_loss, div_loss, logits_std, logits_temp_std, logits.detach()
+        return routing_state, overlap_loss, balance_loss, z_loss, div_loss, logits_std, logits_temp_std, logits.detach()
 
     def _uniform_routing(self, X, logits, logits_std, logits_temp_std):
         """
@@ -178,9 +185,10 @@ class Router(nn.Module):
 
         z_loss = torch.tensor(0.0, device=X.device, dtype=torch.float32)
         div_loss = torch.tensor(0.0, device=X.device, dtype=torch.float32)
-        cov_loss = torch.tensor(0.0, device=X.device, dtype=torch.float32)
+        overlap_loss = torch.tensor(0.0, device=X.device, dtype=torch.float32)
+        balance_loss = torch.tensor(0.0, device=X.device, dtype=torch.float32)
 
-        return routing_state, cov_loss, z_loss, div_loss, logits_std, logits_temp_std, logits.detach()
+        return routing_state, overlap_loss, balance_loss, z_loss, div_loss, logits_std, logits_temp_std, logits.detach()
     
     def z_loss(self, logits):
         """
@@ -191,23 +199,6 @@ class Router(nn.Module):
         """
 
         return torch.logsumexp(logits, dim = -1).square().mean()
-
-    # def aux_loss(self, masked_probs, probs):
-    #     """
-    #     Computes Auxiliary Load Balancing Loss.
-        
-    #     Encourages balanced load across experts.
-
-    #     Args:
-    #         masked_probs (torch.Tensor): Probabilities after masking (load).
-    #         probs (torch.Tensor): Original probabilities (importance).
-    #     """
-    #     f = masked_probs.mean(dim = 0)
-    #     p = probs.mean(dim =0)
-
-    #     lb_loss = (f * p).sum() * self.num_experts
-
-    #     return lb_loss
     
     def diverity_loss(self, probs):
         """
@@ -227,8 +218,100 @@ class Router(nn.Module):
         I = torch.eye(E, device=probs.device, dtype=probs.dtype)
         return ((corr - I) ** 2).mean()
 
-    def covarage_loss(self, probs_e2t):
+
+    def compute_overlap_loss(
+        self, 
+        probs_e2t, 
+        topk_idx, 
+        k
+    ):
         """
-        Encourgates experts to not get the same tokens
+        Soft token coverage loss for expert-choice routing.
+        Kept under the overlap-loss slot for compatibility with the
+        training loop and existing logs.
+
+        Args : 
+            probs_e2t : Router probabilities after softmax | Shape [N, E]
+            topk_idx : Token indices selected by each expert | Shape [k, E]
+            k : Capacity per expert
         """
-        return torch.tensor(0.0, device=probs_e2t.device, dtype=probs_e2t.dtype)
+        N, E = probs_e2t.shape
+
+        if E <= 1 or N <= 1:
+            return probs_e2t.new_tensor(0.0)
+
+        q_e2t = probs_e2t / probs_e2t.sum(dim=0, keepdim=True).clamp_min(1e-8)
+
+        expected_assignments = float(k) * q_e2t.sum(dim=1)
+
+        target = probs_e2t.new_tensor(float(E * k) / float(N))
+
+        relative_coverage = expected_assignments / target.clamp_min(1e-8)
+
+        return (relative_coverage - 1.0).pow(2).mean()
+
+    def compute_balance_loss(
+        self, 
+        probs_e2t,
+        topk_idx, 
+        min_owner_frac = 0.95,
+        l2_weight = 0.2
+    ) :
+
+        """
+        Soft owner balance loss for expert choice 
+
+        Args : 
+            probs_e2t : Router probabilities after softmax | Shape [N, E]
+            topk_idx : Token indices selected by each expert | Shape [k, E]
+            target_entropy : Minimum desired normalized owner entropy 
+        """
+
+        N, E = probs_e2t.shape # Shape : [N, E]
+        device = probs_e2t.device 
+        dtype = probs_e2t.dtype
+
+        if E <= 1 or N <= 1 :
+            return probs_e2t.new_tensor(0.0)
+
+        # Build hard assignment matrix S
+        S = torch.zeros(
+            (N, E),
+            device = device, 
+            dtype=dtype,
+        ) # Shape : [N, E]
+        S.scatter_(
+            dim = 0, 
+            index=topk_idx, 
+            src = torch.ones_like(topk_idx, dtype=dtype, device = device)
+        ) # Shape : [N, E]
+
+        # Compute soft responsability among assigned experts 
+        assigned_prob = probs_e2t * S # Shape : [N, E]
+
+        # Total selected probability mass per token 
+        token_mass = assigned_prob.sum(dim = 1, keepdim=True) # Shape : [N, 1]
+        processed_mask = (S.sum(dim=1, keepdim=True) > 0).to(dtype) # Shape : [N, 1]
+
+        # For each processed token, sum_e responsability[t, e] = 1
+        responsability = assigned_prob / token_mass.clamp_min(1e-8) # Shape : [N, E]
+        responsability = responsability * processed_mask # Shape : [N, E]
+
+        # Aggregate soft owner mass per expert 
+        owner_mass = responsability.sum(dim = 0) # Shape : [E]
+
+        # Distribution over experts of soft ownership 
+        owner_dist = owner_mass / owner_mass.sum().clamp_min(1e-8) # Shape : [E]
+
+        # Penalize if ownership entropy is too low 
+        min_owner = probs_e2t.new_tensor(float(min_owner_frac) / float(E))
+
+        # Penalize only experts below the minimum floor
+        floor_violation = F.relu(min_owner - owner_dist) / min_owner.clamp_min(1e-8)
+        floor_loss = floor_violation.mean()
+
+        # Mild L2 toward uniform, useful to avoid barely-satisfying the floor
+        uniform = torch.full_like(owner_dist, 1.0 / float(E))
+        l2_loss = (owner_dist - uniform).pow(2).sum()
+
+        return floor_loss + l2_weight * l2_loss
